@@ -99,6 +99,20 @@ function findNextClip(clips: Clip[], time: number) {
   return clips.find((clip) => clip.timelineStart >= time)
 }
 
+function otherSlot(slot: 0 | 1): 0 | 1 {
+  return slot === 0 ? 1 : 0
+}
+
+function seekVideo(video: HTMLVideoElement, time: number) {
+  if (Number.isFinite(time)) {
+    try {
+      video.currentTime = time
+    } catch {
+      // Some browsers reject seeks before media metadata is fully available.
+    }
+  }
+}
+
 function sequenceClips(clips: Clip[]) {
   let cursor = 0
 
@@ -193,9 +207,13 @@ function App() {
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false)
   const [previewTime, setPreviewTime] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
-  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const [displayedPreviewSlot, setDisplayedPreviewSlot] = useState<0 | 1>(0)
+  const [displayedPreviewPath, setDisplayedPreviewPath] = useState<string | null>(null)
+  const [isPreviewSwitching, setIsPreviewSwitching] = useState(false)
+  const previewVideoRefs = useRef<Array<HTMLVideoElement | null>>([null, null])
+  const loadedPreviewPathsRef = useRef<Array<string | null>>([null, null])
+  const latestPreviewSourceTimeRef = useRef(0)
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null)
-  const loadedPreviewPathRef = useRef<string | null>(null)
   const lastFrameTimeRef = useRef<number | null>(null)
 
   const activeClip = clips.find((clip) => clip.id === activeClipId) ?? clips[0]
@@ -205,6 +223,9 @@ function App() {
   const previewSourceTime = previewClip
     ? previewClip.sourceStart + (previewTime - previewClip.timelineStart)
     : 0
+  const nextPreviewClip = previewClip
+    ? findNextClip(orderedClips, timelineEnd(previewClip) + 0.001)
+    : findNextClip(orderedClips, previewTime)
   const totalSeconds = Math.max(
     55,
     ...clips.map((clip) => clip.timelineStart + clipLength(clip) + 4),
@@ -218,25 +239,81 @@ function App() {
     }
   }, [activeClipId, previewClip])
 
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
+  latestPreviewSourceTimeRef.current = previewSourceTime
 
+  useEffect(() => {
     if (!previewClip) {
-      video.pause()
-      video.removeAttribute("src")
-      loadedPreviewPathRef.current = null
+      previewVideoRefs.current.forEach((video) => video?.pause())
+      setIsPreviewSwitching(false)
       return
     }
 
-    if (loadedPreviewPathRef.current !== previewClip.path) {
-      video.src = previewClip.path
-      loadedPreviewPathRef.current = previewClip.path
-      video.load()
+    if (displayedPreviewPath === previewClip.path) {
+      return
     }
 
+    const targetSlot = otherSlot(displayedPreviewSlot)
+    const targetVideo = previewVideoRefs.current[targetSlot]
+    const displayedVideo = previewVideoRefs.current[displayedPreviewSlot]
+    if (!targetVideo) return
+    const preparedVideo = targetVideo
+    const preparedClip = previewClip
+
+    let cancelled = false
+    setIsPreviewSwitching(true)
+    displayedVideo?.pause()
+
+    if (loadedPreviewPathsRef.current[targetSlot] !== preparedClip.path) {
+      preparedVideo.src = preparedClip.path
+      preparedVideo.preload = "auto"
+      loadedPreviewPathsRef.current[targetSlot] = preparedClip.path
+      preparedVideo.load()
+    }
+
+    function activatePreparedVideo() {
+      if (cancelled) return
+
+      seekVideo(preparedVideo, latestPreviewSourceTimeRef.current)
+      setDisplayedPreviewSlot(targetSlot)
+      setDisplayedPreviewPath(preparedClip.path)
+      setIsPreviewSwitching(false)
+
+      if (isPlaying) {
+        void preparedVideo.play().catch(() => setIsPlaying(false))
+      }
+    }
+
+    const handleMetadata = () => {
+      updateClipDuration(preparedClip.id, preparedVideo.duration)
+      seekVideo(preparedVideo, latestPreviewSourceTimeRef.current)
+    }
+
+    preparedVideo.addEventListener("loadedmetadata", handleMetadata, { once: true })
+    preparedVideo.addEventListener("canplay", activatePreparedVideo, { once: true })
+
+    if (preparedVideo.readyState >= 3) {
+      activatePreparedVideo()
+    } else if (preparedVideo.readyState >= 1) {
+      seekVideo(preparedVideo, latestPreviewSourceTimeRef.current)
+    }
+
+    return () => {
+      cancelled = true
+      preparedVideo.removeEventListener("loadedmetadata", handleMetadata)
+      preparedVideo.removeEventListener("canplay", activatePreparedVideo)
+    }
+  }, [displayedPreviewPath, displayedPreviewSlot, isPlaying, previewClip])
+
+  useEffect(() => {
+    if (!previewClip || displayedPreviewPath !== previewClip.path) {
+      return
+    }
+
+    const video = previewVideoRefs.current[displayedPreviewSlot]
+    if (!video) return
+
     if (Math.abs(video.currentTime - previewSourceTime) > 0.08) {
-      video.currentTime = previewSourceTime
+      seekVideo(video, previewSourceTime)
     }
 
     if (isPlaying && video.paused) {
@@ -246,7 +323,29 @@ function App() {
     if (!isPlaying && !video.paused) {
       video.pause()
     }
-  }, [isPlaying, previewClip, previewSourceTime])
+  }, [displayedPreviewPath, displayedPreviewSlot, isPlaying, previewClip, previewSourceTime])
+
+  useEffect(() => {
+    if (
+      !nextPreviewClip ||
+      isPreviewSwitching ||
+      displayedPreviewPath === nextPreviewClip.path ||
+      (previewClip && displayedPreviewPath !== previewClip.path)
+    ) {
+      return
+    }
+
+    const preloadSlot = otherSlot(displayedPreviewSlot)
+    const video = previewVideoRefs.current[preloadSlot]
+    if (!video || loadedPreviewPathsRef.current[preloadSlot] === nextPreviewClip.path) {
+      return
+    }
+
+    video.src = nextPreviewClip.path
+    video.preload = "auto"
+    loadedPreviewPathsRef.current[preloadSlot] = nextPreviewClip.path
+    video.load()
+  }, [displayedPreviewPath, displayedPreviewSlot, isPreviewSwitching, nextPreviewClip, previewClip])
 
   useEffect(() => {
     if (!isPlaying) {
@@ -487,32 +586,52 @@ function App() {
           <section className="grid min-h-0 grid-rows-[minmax(0,1fr)_300px]">
             <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_300px] gap-4 overflow-hidden p-4">
               <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-lg border border-border bg-black">
-                <div className="relative min-h-80">
-                  <video
-                    ref={videoRef}
-                    className="h-full max-h-[calc(100vh-458px)] min-h-80 w-full bg-black object-contain"
-                    playsInline
-                    muted
-                    onLoadedMetadata={(event) => {
-                      if (previewClip) {
-                        updateClipDuration(previewClip.id, event.currentTarget.duration)
-                      }
-                    }}
-                    onEnded={() => {
-                      const nextClip = findNextClip(orderedClips, previewTime + 0.01)
-                      if (!nextClip) {
-                        setIsPlaying(false)
-                        setPreviewTime(presentationDuration)
-                        return
-                      }
+                <div className="relative h-full min-h-80 overflow-hidden bg-black">
+                  {[0, 1].map((slot) => (
+                    <video
+                      key={slot}
+                      ref={(element) => {
+                        previewVideoRefs.current[slot] = element
+                      }}
+                      className={cn(
+                        "absolute inset-0 h-full w-full bg-black object-contain transition-opacity duration-150",
+                        displayedPreviewSlot === slot && previewClip
+                          ? "opacity-100"
+                          : "pointer-events-none opacity-0",
+                      )}
+                      playsInline
+                      muted
+                      preload="auto"
+                      onLoadedMetadata={(event) => {
+                        const loadedPath = loadedPreviewPathsRef.current[slot]
+                        const loadedClip = orderedClips.find((clip) => clip.path === loadedPath)
+                        if (loadedClip) {
+                          updateClipDuration(loadedClip.id, event.currentTarget.duration)
+                        }
+                      }}
+                      onEnded={(event) => {
+                        if (event.currentTarget !== previewVideoRefs.current[displayedPreviewSlot]) {
+                          return
+                        }
 
-                      setPreviewTime(nextClip.timelineStart)
-                    }}
-                  />
+                        const nextClip = findNextClip(orderedClips, previewTime + 0.01)
+                        if (!nextClip) {
+                          setIsPlaying(false)
+                          setPreviewTime(presentationDuration)
+                          return
+                        }
+
+                        setPreviewTime(nextClip.timelineStart)
+                      }}
+                    />
+                  ))}
                   {!previewClip ? (
                     <div className="absolute inset-0 grid place-items-center bg-black text-sm text-muted-foreground">
                       No clip at {seconds(previewTime)}
                     </div>
+                  ) : null}
+                  {isPreviewSwitching ? (
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1 bg-primary/50" />
                   ) : null}
                 </div>
 
