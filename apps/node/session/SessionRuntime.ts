@@ -6,6 +6,9 @@ import os from "node:os"
 import path from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
+import { readCaptureSettings } from "../capture/CaptureSettingsStore"
+import type { CaptureSettings } from "../shared/types"
+import { writeRuntimeStatus } from "../status/RuntimeStatus"
 import { SessionStore, type StoredSession } from "./SessionStore"
 
 type OpenCommand = {
@@ -34,6 +37,7 @@ export type StartSessionOptions = {
   sessionId?: string
   lastSession?: boolean
   grid?: boolean
+  immediateRecord?: boolean
 }
 
 export class SessionAlreadyRunningError extends Error {
@@ -50,8 +54,8 @@ export class SessionNotFoundError extends Error {
   }
 }
 
-const repoRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
-const editorRoot = path.join(repoRoot, "editor")
+const repoRoot = path.resolve(fileURLToPath(new URL("../../..", import.meta.url)))
+const editorRoot = path.join(repoRoot, "apps", "editor")
 const runtimePort = 5173
 const runtimeUrl = `http://127.0.0.1:${runtimePort}/`
 const capiRoot = path.join(os.tmpdir(), "capi")
@@ -60,6 +64,12 @@ const runtimeDatabasePath = path.join(capiRoot, "capi.sqlite")
 const runtimeLockFile = path.join(capiRoot, "runtime.lock")
 const appBasePath = "/app"
 const gridViewUrl = new URL(`${appBasePath}/sessions`, runtimeUrl).toString()
+const defaultCaptureSettings: CaptureSettings = {
+  target: "display",
+  displayId: 1,
+  microphone: true,
+  showClicks: true,
+}
 
 function npmCommand() {
   return process.platform === "win32" ? "npm.cmd" : "npm"
@@ -169,6 +179,10 @@ async function acquireRuntimeLock(session: StoredSession | null) {
   }
 }
 
+async function captureSettingsForImmediateRecord() {
+  return (await readCaptureSettings()) ?? defaultCaptureSettings
+}
+
 function openBrowser(url: string) {
   const opener = openCommandFor(url)
   const child = spawn(opener.command, opener.args, {
@@ -231,10 +245,17 @@ class RunningSessionRuntime implements SessionRuntime {
   private editorStdoutBuffer = ""
   private editorStderrBuffer = ""
   private browserOpened = false
+  private immediateRecordStarted = false
   private lockOwned = false
   private stopping = false
 
-  constructor(private readonly session: StoredSession | null, sessionStore: SessionStore, url: string, private readonly initialViewUrl: string) {
+  constructor(
+    private readonly session: StoredSession | null,
+    sessionStore: SessionStore,
+    url: string,
+    private readonly initialViewUrl: string,
+    private readonly immediateRecord: boolean,
+  ) {
     this.sessionId = session?.id ?? null
     this.sessionDir = session?.sessionDir ?? null
     this.sourceDir = session?.sourceDir ?? null
@@ -256,6 +277,13 @@ class RunningSessionRuntime implements SessionRuntime {
       console.log(`Capi session ${this.session.id}`)
       console.log(`Session directory ${this.session.sessionDir}`)
       console.log(`Source directory ${this.session.sourceDir}`)
+      if (this.immediateRecord) {
+        await writeRuntimeStatus({
+          state: "starting",
+          sessionId: this.session.id,
+          message: "Record shortcut received.",
+        })
+      }
     } else {
       console.log("Capi grid")
     }
@@ -324,6 +352,18 @@ class RunningSessionRuntime implements SessionRuntime {
         const url = editorUrlFromOutput(output.lines.join("\n"))
         if (url) {
           this.browserOpened = true
+          if (this.immediateRecord && this.session && !this.immediateRecordStarted) {
+            this.immediateRecordStarted = true
+            void this.startImmediateRecord().catch((error) => {
+              const message = error instanceof Error ? error.message : "Could not start recording."
+              console.error(message)
+              void writeRuntimeStatus({
+                state: "error",
+                sessionId: this.session?.id ?? null,
+                message,
+              })
+            })
+          }
           if (process.env.CAPI_NO_OPEN === "1") {
             console.log(`Editor available at ${this.initialViewUrl}`)
           } else {
@@ -354,6 +394,30 @@ class RunningSessionRuntime implements SessionRuntime {
       console.error(`Editor server stopped with ${reason}.`)
       await stopRuntimeAndExit(this, code ?? 1)
     })
+  }
+
+  private async startImmediateRecord() {
+    if (!this.session) {
+      throw new Error("Immediate record requires an active session.")
+    }
+
+    const settings = await captureSettingsForImmediateRecord()
+    await writeRuntimeStatus({
+      state: "recording",
+      sessionId: this.session.id,
+      message: "Recording.",
+    })
+
+    const response = await fetch(new URL("/captures", runtimeUrl), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings }),
+    })
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as { error?: string } | null
+      throw new Error(body?.error ?? `Could not start recording: ${response.status}.`)
+    }
   }
 }
 
@@ -441,6 +505,29 @@ async function createSessionInRunningRuntime(lock: Partial<RuntimeLock>) {
   return await response.json() as RemoteSessionResponse
 }
 
+async function startCaptureInRunningRuntime(lock: Partial<RuntimeLock>, sessionId: string) {
+  const baseUrl = lock.url ?? runtimeUrl
+  const settings = await captureSettingsForImmediateRecord()
+  await writeRuntimeStatus({
+    state: "recording",
+    sessionId,
+    message: "Recording.",
+  })
+
+  const response = await fetch(new URL("/captures", baseUrl), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ settings }),
+  })
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: string } | null
+    const message = body?.error ?? `Could not start recording: ${response.status}.`
+    await writeRuntimeStatus({ state: "error", sessionId, message })
+    throw new Error(message)
+  }
+}
+
 async function delegateToRunningRuntime(lock: Partial<RuntimeLock>, options: StartSessionOptions) {
   if (options.grid) {
     const url = new URL("/app/sessions", lock.url ?? runtimeUrl).toString()
@@ -458,6 +545,11 @@ async function delegateToRunningRuntime(lock: Partial<RuntimeLock>, options: Sta
   console.log(`Capi session ${result.session.id}`)
   console.log(`Session directory ${result.session.sessionDir}`)
   console.log(`Source directory ${result.session.sourceDir}`)
+  if (options.immediateRecord) {
+    void startCaptureInRunningRuntime(lock, result.session.id).catch((error) => {
+      console.error(error instanceof Error ? error.message : error)
+    })
+  }
   if (process.env.CAPI_NO_OPEN === "1") {
     console.log(`Editor available at ${url}`)
   } else {
@@ -476,7 +568,13 @@ export async function startSession(options: StartSessionOptions = {}): Promise<S
   const sessionStore = new SessionStore(runtimeDatabasePath)
   const { session, created } = resolveStartupSession(sessionStore, options)
   const initialViewUrl = session ? viewUrlForSession(session.id) : gridViewUrl
-  const runtime = new RunningSessionRuntime(session, sessionStore, runtimeUrl, initialViewUrl)
+  const runtime = new RunningSessionRuntime(
+    session,
+    sessionStore,
+    runtimeUrl,
+    initialViewUrl,
+    options.immediateRecord === true,
+  )
 
   try {
     await runtime.start()

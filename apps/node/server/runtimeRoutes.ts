@@ -12,6 +12,7 @@ import type { CaptureSettings } from "../shared/types"
 import { capiExportMiddleware } from "./exportRoute"
 import { SourceRegistry } from "../sources/SourceRegistry"
 import type { StoredSession } from "../session/SessionStore"
+import { writeRuntimeStatus } from "../status/RuntimeStatus"
 
 type ActiveRuntimeSession = Pick<StoredSession, "id" | "sessionDir" | "sourceDir">
 
@@ -244,9 +245,19 @@ async function captureSource(
   const filePath = path.join(session.sourceDir, file)
   const capture = startScreenCapture(filePath, settings)
   onActiveCapture(capture)
+  await writeRuntimeStatus({
+    state: "recording",
+    sessionId: session.id,
+    message: "Recording.",
+  })
 
   const result = await capture.result
   const source = await registry.registerSourceWithMetadata(result.filePath)
+  await writeRuntimeStatus({
+    state: "idle",
+    sessionId: session.id,
+    message: "Recording saved.",
+  })
   sendJson(response, 200, registry.sourceForEditor(source))
 }
 
@@ -550,6 +561,11 @@ export function capiRuntimeMiddleware(root: string) {
           return
         }
 
+        void writeRuntimeStatus({
+          state: "stopping",
+          sessionId: activeSession?.id ?? null,
+          message: "Stopping recording.",
+        })
         activeScreenCapture.stop()
         sendJson(response, 200, { status: "stopping" })
         return
@@ -596,6 +612,11 @@ export function capiRuntimeMiddleware(root: string) {
         await activeCapture
       } catch (error) {
         const message = error instanceof Error ? error.message : "Capture failed."
+        await writeRuntimeStatus({
+          state: "error",
+          sessionId: activeSession?.id ?? null,
+          message,
+        })
         sendJson(response, 500, { error: message })
       }
       return

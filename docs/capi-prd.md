@@ -39,7 +39,7 @@ and ffmpeg export. The browser editor owns preview, timeline interaction, trim
 controls, source selection, and export initiation.
 
 The editor must remain independently runnable during prototype development. A
-developer should be able to run `cd editor && npm run dev` and work against
+developer should be able to run `cd apps/editor && npm run dev` and work against
 mocked sources without starting the orchestrator. The full local app should run
 through the root orchestrator command, `npm run capi`, which creates a session,
 starts the editor server, mounts runtime routes, and opens the browser.
@@ -149,7 +149,7 @@ a browser editor served by the local runtime.
 - Mocked sources should be loaded through the editor-facing `CapiClient` boundary so runtime-backed sources can replace them later.
 - The editor must not import orchestrator/session/capture implementations directly.
 - The editor may choose between `mockCapiClient` and `runtimeCapiClient`, but editor components should depend only on the shared `CapiClient` interface.
-- `mockCapiClient` keeps standalone editor development working with `editor/mock-sources`.
+- `mockCapiClient` keeps standalone editor development working with `apps/editor/mock-sources`.
 - `runtimeCapiClient` talks to local runtime routes for session sources, capture, and export.
 - Runtime source retrieval should be exposed through `GET /sources`.
 - Runtime capture should be exposed through `POST /captures`.

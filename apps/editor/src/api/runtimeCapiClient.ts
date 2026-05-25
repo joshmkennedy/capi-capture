@@ -9,7 +9,7 @@ import type {
   SessionEditorState,
   SessionsResponse,
   Source,
-} from "../../../src/shared/types"
+} from "../../../node/shared/types"
 import type { CapiClient } from "./capiClientTypes"
 import { deleteJson, getJson, postJson, putJson } from "./http"
 

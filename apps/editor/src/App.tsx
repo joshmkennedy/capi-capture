@@ -41,9 +41,9 @@ import { createExportPayload } from "@/export/exportClient"
 import { useTimelinePreview } from "@/preview/useTimelinePreview"
 import type { Source } from "@/sources/sourceModel"
 import type { Clip } from "@/timeline/clipModel"
-import type { CaptureDisplay, CaptureSettings } from "../../src/shared/types"
+import type { CaptureDisplay, CaptureSettings } from "../../node/shared/types"
 import { clipLength, timelineEnd } from "@/timeline/clipModel"
-import type { SessionSummary } from "../../src/shared/types"
+import type { SessionSummary } from "../../node/shared/types"
 import {
   applyClipDuration,
   clamp,

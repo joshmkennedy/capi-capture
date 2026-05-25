@@ -1,4 +1,4 @@
-import type { ExportPayload } from "../../../src/shared/types"
+import type { ExportPayload } from "../../../node/shared/types"
 import type { Source } from "../sources/sourceModel"
 import type { Clip } from "../timeline/clipModel"
 

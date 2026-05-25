@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "capi": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' npx tsx src/main.ts",
+    "capi": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' npx tsx apps/node/main.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

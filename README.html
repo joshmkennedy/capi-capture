@@ -392,7 +392,8 @@ POST /export</code></pre>
     branding.png
     current*.png
 
-  src/
+  apps/
+    node/
     main.ts
     session/
       SessionRuntime.ts
@@ -429,24 +430,27 @@ POST /export</code></pre>
       schemas.ts
       types.ts
 
-  editor/
-    index.html
-    src/
-      App.tsx
-      api/
-        client.ts
-        events.ts
-      sources/
-        SourceList.tsx
-      timeline/
-        TimelineView.tsx
-      export/
-        ExportButton.tsx</code></pre>
+    editor/
+      index.html
+      src/
+        App.tsx
+        api/
+          client.ts
+          events.ts
+        sources/
+          SourceList.tsx
+        timeline/
+          TimelineView.tsx
+        export/
+          ExportButton.tsx
+
+    sketchybar/
+      capi.sh</code></pre>
 
       <p>
-        <code>src/</code> owns the local runtime: macOS capture, temporary files,
+        <code>apps/node/</code> owns the local runtime: macOS capture, temporary files,
         source watching, API routes, WebSocket events, and ffmpeg export.
-        <code>editor/</code> owns the browser editing experience. Shared schemas
+        <code>apps/editor/</code> owns the browser editing experience. Shared schemas
         and types define the contract between them.
       </p>
     </section>

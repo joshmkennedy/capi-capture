@@ -6,7 +6,7 @@ import type {
   ExportPayload,
   ExportResult,
   SessionEditorState,
-} from "../../../src/shared/types"
+} from "../../../node/shared/types"
 import type { CapiClient } from "./capiClientTypes"
 import { postJson } from "./http"
 

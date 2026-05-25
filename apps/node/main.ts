@@ -24,6 +24,10 @@ function startupOptions(args: string[]): StartSessionOptions {
     return { grid: true }
   }
 
+  if (args.includes("--record") || args.includes("--immediate-record")) {
+    return { immediateRecord: true }
+  }
+
   return {}
 }
 

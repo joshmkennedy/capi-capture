@@ -9,7 +9,7 @@ import type {
   SessionEditorState,
   SessionsResponse,
   Source,
-} from "../../../src/shared/types"
+} from "../../../node/shared/types"
 
 export type CapiClient = {
   listSessions(): Promise<SessionsResponse>
