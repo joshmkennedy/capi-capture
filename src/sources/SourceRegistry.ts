@@ -6,6 +6,10 @@ import { probeMediaDuration } from "./MediaMetadata"
 const FALLBACK_SOURCE_DURATION = 12
 const SOURCE_URL_PREFIX = "/clips"
 
+type SourceRegistryOptions = {
+  sessionId?: string | null
+}
+
 export type RegisteredSource = Source & {
   filePath: string
   registeredAt: string
@@ -23,7 +27,11 @@ function sourceIdBase(file: string) {
   return file.replace(/\.[^.]+$/, "")
 }
 
-function sourceUrlPath(file: string) {
+function sourceUrlPath(file: string, sessionId?: string | null) {
+  if (sessionId) {
+    return `/sessions/${encodeURIComponent(sessionId)}/clips/${encodeURIComponent(file)}`
+  }
+
   return `${SOURCE_URL_PREFIX}/${encodeURIComponent(file)}`
 }
 
@@ -36,6 +44,8 @@ export class SourceRegistry {
   private readonly sourceIdsByFilePath = new Map<string, string>()
   private readonly sourceIdsByUrlPath = new Map<string, string>()
 
+  constructor(private readonly options: SourceRegistryOptions = {}) {}
+
   registerSource(filePath: string, options: RegisterSourceOptions = {}) {
     const resolvedFilePath = path.resolve(filePath)
     const existingId = this.sourceIdsByFilePath.get(resolvedFilePath)
@@ -45,7 +55,7 @@ export class SourceRegistry {
 
     const file = path.basename(resolvedFilePath)
     const id = this.nextSourceId(sourceIdBase(file))
-    const urlPath = sourceUrlPath(file)
+    const urlPath = sourceUrlPath(file, this.options.sessionId)
     const source: RegisteredSource = {
       id,
       title: sourceTitle(file),

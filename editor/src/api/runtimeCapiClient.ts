@@ -1,8 +1,12 @@
 import type {
   CaptureOptions,
   CaptureSettings,
+  CreateSessionResponse,
+  CurrentSessionResponse,
   ExportPayload,
   ExportResult,
+  SessionEditorState,
+  SessionsResponse,
   Source,
 } from "../../../src/shared/types"
 import type { CapiClient } from "./capiClientTypes"
@@ -13,6 +17,30 @@ type CaptureSettingsResponse = {
 }
 
 export const runtimeCapiClient: CapiClient = {
+  async listSessions() {
+    return getJson<SessionsResponse>("/sessions", "Could not load sessions.")
+  },
+
+  async createSession() {
+    return postJson<CreateSessionResponse>("/sessions", null, "Could not create session.")
+  },
+
+  async getCurrentSession() {
+    return getJson<CurrentSessionResponse>("/session", "Could not load the active session.")
+  },
+
+  async getSessionEditorState() {
+    return getJson<SessionEditorState>("/session/editor-state", "Could not load session editor state.")
+  },
+
+  async saveSessionEditorState(state) {
+    return putJson<SessionEditorState>(
+      "/session/editor-state",
+      { state },
+      "Could not save session editor state.",
+    )
+  },
+
   async listSources() {
     return getJson<Source[]>("/sources", "Could not load sources.")
   },

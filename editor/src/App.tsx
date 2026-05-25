@@ -32,7 +32,7 @@ import {
   applyClipDuration,
   clamp,
   MIN_CLIP_SECONDS,
-  moveClipBoundary,
+  panClipSourceWindow,
   seconds,
   sequenceClips,
   sortClips,
@@ -72,9 +72,12 @@ const DEFAULT_CAPTURE_SETTINGS: CaptureSettings = {
   showClicks: true,
 }
 
-function clipForSource(source: Source, index: number): Clip {
-  const sourceStart = index === 0 ? 0.8 : index === 2 ? 0 : 1.2
-  const sourceEnd = Math.max(sourceStart + MIN_CLIP_SECONDS, source.duration - 1)
+function clipForSource(source: Source, index: number, options: { demoTrimmed?: boolean } = {}): Clip {
+  const sourceStart = options.demoTrimmed ? (index === 0 ? 0.8 : index === 2 ? 0 : 1.2) : 0
+  const sourceEnd = options.demoTrimmed
+    ? Math.max(sourceStart + MIN_CLIP_SECONDS, source.duration - 1)
+    : Math.max(0, source.duration)
+  const timelineDuration = sourceEnd - sourceStart
 
   return {
     id: `clip-${index + 1}`,
@@ -82,12 +85,17 @@ function clipForSource(source: Source, index: number): Clip {
     sourceStart,
     sourceEnd,
     timelineStart: 0,
+    timelineDuration,
     color: CLIP_COLORS[index % CLIP_COLORS.length],
   }
 }
 
 function clipsForSources(sources: Source[]) {
-  return sequenceClips(sources.map(clipForSource))
+  return sequenceClips(
+    sources.map((source, index) =>
+      clipForSource(source, index, { demoTrimmed: capiClientMode !== "runtime" }),
+    ),
+  )
 }
 
 function App() {
@@ -128,6 +136,8 @@ function App() {
   const activeClip = (activeClipId ? clips.find((clip) => clip.id === activeClipId) : null) ?? clips[0] ?? null
   const activeSource = activeClip ? sourceForClip(activeClip) : null
   const orderedClips = useMemo(() => sortClips(clips), [clips])
+  const panningClip =
+    drag?.mode === "move" ? orderedClips.find((clip) => clip.id === drag.clipId) ?? null : null
   const presentationDuration = Math.max(...clips.map(timelineEnd), 0)
   const totalSeconds = Math.max(
     55,
@@ -253,11 +263,11 @@ function App() {
 
     setClips(() => {
       if (drag.mode === "move") {
-        return moveClipBoundary(drag.initialClips, drag.clipId, deltaSeconds, sourceDurationForClip)
+        return panClipSourceWindow(drag.initialClips, drag.clipId, -deltaSeconds, sourceDurationForClip)
       }
 
       if (drag.mode === "trim-start") {
-        return trimClipStart(drag.initialClips, drag.clipId, deltaSeconds, sourceDurationForClip)
+        return trimClipStart(drag.initialClips, drag.clipId, deltaSeconds)
       }
 
       return trimClipEnd(drag.initialClips, drag.clipId, deltaSeconds, sourceDurationForClip)
@@ -307,7 +317,7 @@ function App() {
   }
 
   function nudgeClip(clipId: string, amount: number) {
-    setClips((current) => moveClipBoundary(sortClips(current), clipId, amount, sourceDurationForClip))
+    setClips((current) => panClipSourceWindow(sortClips(current), clipId, amount, sourceDurationForClip))
   }
 
   function jumpPreviewToTrim(edge: "start" | "end") {
@@ -739,6 +749,7 @@ function App() {
                             sourceStart: Number(clip.sourceStart.toFixed(2)),
                             sourceEnd: Number(clip.sourceEnd.toFixed(2)),
                             timelineStart: Number(clip.timelineStart.toFixed(2)),
+                            timelineDuration: Number(clip.timelineDuration.toFixed(2)),
                           })),
                         },
                         null,
@@ -757,7 +768,7 @@ function App() {
                   Timeline
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  Drag blocks to change the previous cut. Drag edges to ripple trim.
+                  Drag blocks to pan source media. Drag edges to ripple trim.
                 </div>
               </div>
 
@@ -803,18 +814,21 @@ function App() {
                   </div>
 
                   {orderedClips.map((clip) => {
+                    const source = sourceForClip(clip)
                     const left = clip.timelineStart * PIXELS_PER_SECOND
                     const width = Math.max(clipLength(clip) * PIXELS_PER_SECOND, 32)
                     const top = 78
+                    const isPanningClip = panningClip?.id === clip.id
 
                     return (
                       <div
                         key={clip.id}
                         className={cn(
-                          "absolute h-11 cursor-grab select-none rounded-md border shadow-sm active:cursor-grabbing",
+                          "absolute h-11 cursor-grab select-none overflow-hidden rounded-md border shadow-sm active:cursor-grabbing",
                           activeClip?.id === clip.id
-                            ? "border-primary ring-2 ring-primary/40"
+                            ? "z-10 border-primary ring-2 ring-primary/40"
                             : "border-black/30",
+                          isPanningClip ? "opacity-0" : "opacity-100",
                         )}
                         style={{
                           left,
@@ -829,28 +843,34 @@ function App() {
                         }}
                       >
                         <button
-                          className="absolute left-0 top-0 flex h-full w-4 cursor-ew-resize items-center justify-center rounded-l-md bg-black/30"
+                          type="button"
+                          className="absolute left-0 top-0 z-30 grid h-full w-5 cursor-ew-resize place-items-center rounded-l-md bg-black/45"
                           onPointerDown={(event) => {
+                            event.preventDefault()
                             event.stopPropagation()
                             beginDrag(event, clip, "trim-start")
                           }}
+                          onClick={(event) => event.stopPropagation()}
                           title="Trim start"
                         >
                           <GripVertical className="size-3 text-white" />
                         </button>
-                        <div className="flex h-full min-w-0 items-center gap-2 px-5 text-left text-xs font-semibold text-white">
+                        <div className="relative z-10 flex h-full min-w-0 items-center gap-2 px-5 text-left text-xs font-semibold text-white">
                           <Play className="size-3 shrink-0" />
-                          <span className="truncate">{sourceForClip(clip).file}</span>
+                          <span className="truncate">{source.file}</span>
                           <span className="ml-auto shrink-0 font-mono text-[11px]">
                             {seconds(clipLength(clip))}
                           </span>
                         </div>
                         <button
-                          className="absolute right-0 top-0 flex h-full w-4 cursor-ew-resize items-center justify-center rounded-r-md bg-black/30"
+                          type="button"
+                          className="absolute right-0 top-0 z-30 grid h-full w-5 cursor-ew-resize place-items-center rounded-r-md bg-black/45"
                           onPointerDown={(event) => {
+                            event.preventDefault()
                             event.stopPropagation()
                             beginDrag(event, clip, "trim-end")
                           }}
+                          onClick={(event) => event.stopPropagation()}
                           title="Trim end"
                         >
                           <GripVertical className="size-3 text-white" />
@@ -858,6 +878,14 @@ function App() {
                       </div>
                     )
                   })}
+
+                  {panningClip ? (
+                    <PanningSourceOverlay
+                      clip={panningClip}
+                      source={sourceForClip(panningClip)}
+                      pixelsPerSecond={PIXELS_PER_SECOND}
+                    />
+                  ) : null}
                 </div>
               </div>
             </footer>
@@ -876,6 +904,54 @@ function App() {
         />
       ) : null}
     </main>
+  )
+}
+
+function PanningSourceOverlay({
+  clip,
+  source,
+  pixelsPerSecond,
+}: {
+  clip: Clip
+  source: Source
+  pixelsPerSecond: number
+}) {
+  const sourceDuration = Math.max(source.duration, clip.sourceEnd, MIN_CLIP_SECONDS)
+  const sourceLeft = (clip.timelineStart - clip.sourceStart) * pixelsPerSecond
+  const sourceWidth = sourceDuration * pixelsPerSecond
+  const windowLeft = clip.timelineStart * pixelsPerSecond
+  const windowWidth = Math.max(clipLength(clip) * pixelsPerSecond, 32)
+
+  return (
+    <div className="pointer-events-none absolute left-0 top-[72px] z-30 h-[60px]">
+      <div
+        className="absolute top-3 h-11 rounded-md border-2 shadow-lg"
+        style={{
+          left: sourceLeft,
+          width: sourceWidth,
+          minWidth: windowWidth,
+          borderColor: clip.color,
+          backgroundColor: clip.color,
+          backgroundImage:
+            "linear-gradient(to right, rgba(255,255,255,0.24) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.18), rgba(0,0,0,0.28))",
+          backgroundSize: `${pixelsPerSecond}px 100%, 100% 100%`,
+          opacity: 0.78,
+        }}
+      >
+        <div className="flex h-full min-w-0 items-center gap-2 px-5 text-xs font-semibold text-white">
+          <Play className="size-3 shrink-0" />
+          <span className="truncate">{source.file}</span>
+          <span className="ml-auto shrink-0 font-mono text-[11px]">{seconds(sourceDuration)}</span>
+        </div>
+      </div>
+      <div
+        className="absolute top-1 z-10 h-[54px] rounded-md border-2 border-white bg-white/5 shadow-[0_0_0_1px_rgba(0,0,0,0.65),0_10px_24px_rgba(0,0,0,0.35)]"
+        style={{
+          left: windowLeft,
+          width: windowWidth,
+        }}
+      />
+    </div>
   )
 }
 

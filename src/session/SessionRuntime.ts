@@ -1,36 +1,52 @@
 import { type ChildProcess, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { rmSync, unlinkSync } from "node:fs"
+import { unlinkSync } from "node:fs"
 import { mkdir, open, readFile, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
+import { SessionStore, type StoredSession } from "./SessionStore"
 
 type OpenCommand = {
   command: string
   args: string[]
 }
 
-type RuntimeLock = {
+export type RuntimeLock = {
   pid: number
-  sessionId: string
-  sessionDir: string
+  sessionId: string | null
+  sessionDir: string | null
+  sourceDir: string | null
   url: string
   startedAt: string
 }
 
 export type SessionRuntime = {
-  readonly sessionId: string
-  readonly sessionDir: string
+  readonly sessionId: string | null
+  readonly sessionDir: string | null
+  readonly sourceDir: string | null
   readonly url: string
   stop(): Promise<void>
 }
 
+export type StartSessionOptions = {
+  sessionId?: string
+  lastSession?: boolean
+  grid?: boolean
+}
+
 export class SessionAlreadyRunningError extends Error {
-  constructor() {
+  constructor(readonly lock: Partial<RuntimeLock>) {
     super("Capi is already running.")
     this.name = "SessionAlreadyRunningError"
+  }
+}
+
+export class SessionNotFoundError extends Error {
+  constructor(sessionId: string) {
+    super(`Capi session ${sessionId} was not found.`)
+    this.name = "SessionNotFoundError"
   }
 }
 
@@ -39,7 +55,11 @@ const editorRoot = path.join(repoRoot, "editor")
 const runtimePort = 5173
 const runtimeUrl = `http://127.0.0.1:${runtimePort}/`
 const capiRoot = path.join(os.tmpdir(), "capi")
+const sessionsRoot = path.join(capiRoot, "sessions")
+const runtimeDatabasePath = path.join(capiRoot, "capi.sqlite")
 const runtimeLockFile = path.join(capiRoot, "runtime.lock")
+const sessionViewParam = "sessionId"
+const gridViewUrl = `${runtimeUrl}?view=grid`
 
 function npmCommand() {
   return process.platform === "win32" ? "npm.cmd" : "npm"
@@ -99,7 +119,22 @@ async function readRuntimeLock() {
   }
 }
 
-async function acquireRuntimeLock(sessionId: string, sessionDir: string) {
+function viewUrlForSession(sessionId: string, baseUrl = runtimeUrl) {
+  const url = new URL(baseUrl)
+  url.searchParams.set(sessionViewParam, sessionId)
+  return url.toString()
+}
+
+async function liveRuntimeLock() {
+  const lock = await readRuntimeLock()
+  if (typeof lock?.pid === "number" && isProcessRunning(lock.pid)) {
+    return lock
+  }
+
+  return null
+}
+
+async function acquireRuntimeLock(session: StoredSession | null) {
   await mkdir(capiRoot, { recursive: true })
 
   while (true) {
@@ -107,8 +142,9 @@ async function acquireRuntimeLock(sessionId: string, sessionDir: string) {
       const handle = await open(runtimeLockFile, "wx")
       const lock: RuntimeLock = {
         pid: process.pid,
-        sessionId,
-        sessionDir,
+        sessionId: session?.id ?? null,
+        sessionDir: session?.sessionDir ?? null,
+        sourceDir: session?.sourceDir ?? null,
         url: runtimeUrl,
         startedAt: new Date().toISOString(),
       }
@@ -124,11 +160,8 @@ async function acquireRuntimeLock(sessionId: string, sessionDir: string) {
         throw error
       }
 
-      const lock = await readRuntimeLock()
-      if (typeof lock?.pid === "number" && isProcessRunning(lock.pid)) {
-        console.error("Capi is already running.")
-        console.error(`Open ${lock.url ?? runtimeUrl} or stop the existing session first.`)
-        console.error(`Existing session: ${lock.sessionId ?? "unknown"} (pid ${lock.pid})`)
+      const lock = await liveRuntimeLock()
+      if (lock) {
         return false
       }
 
@@ -189,10 +222,12 @@ async function killProcessGroup(child: ChildProcess | null) {
 }
 
 class RunningSessionRuntime implements SessionRuntime {
-  readonly sessionId: string
-  readonly sessionDir: string
+  readonly sessionId: string | null
+  readonly sessionDir: string | null
+  readonly sourceDir: string | null
   readonly url: string
 
+  private readonly sessionStore: SessionStore
   private editorProcess: ChildProcess | null = null
   private editorStdoutBuffer = ""
   private editorStderrBuffer = ""
@@ -200,22 +235,31 @@ class RunningSessionRuntime implements SessionRuntime {
   private lockOwned = false
   private stopping = false
 
-  constructor(sessionId: string, sessionDir: string, url: string) {
-    this.sessionId = sessionId
-    this.sessionDir = sessionDir
+  constructor(private readonly session: StoredSession | null, sessionStore: SessionStore, url: string, private readonly initialViewUrl: string) {
+    this.sessionId = session?.id ?? null
+    this.sessionDir = session?.sessionDir ?? null
+    this.sourceDir = session?.sourceDir ?? null
+    this.sessionStore = sessionStore
     this.url = url
   }
 
   async start() {
-    this.lockOwned = await acquireRuntimeLock(this.sessionId, this.sessionDir)
+    this.lockOwned = await acquireRuntimeLock(this.session)
     if (!this.lockOwned) {
-      throw new SessionAlreadyRunningError()
+      throw new SessionAlreadyRunningError((await liveRuntimeLock()) ?? {})
     }
 
-    await mkdir(this.sessionDir, { recursive: true })
+    if (this.session) {
+      await mkdir(this.session.sessionDir, { recursive: true })
+      await mkdir(this.session.sourceDir, { recursive: true })
+      this.sessionStore.markSessionOpened(this.session.id)
 
-    console.log(`Capi session ${this.sessionId}`)
-    console.log(`Session directory ${this.sessionDir}`)
+      console.log(`Capi session ${this.session.id}`)
+      console.log(`Session directory ${this.session.sessionDir}`)
+      console.log(`Source directory ${this.session.sourceDir}`)
+    } else {
+      console.log("Capi grid")
+    }
 
     this.startEditorServer()
   }
@@ -227,15 +271,14 @@ class RunningSessionRuntime implements SessionRuntime {
 
     this.stopping = true
     await killProcessGroup(this.editorProcess)
-    await rm(this.sessionDir, { recursive: true, force: true })
     if (this.lockOwned) {
       await rm(runtimeLockFile, { force: true })
       this.lockOwned = false
     }
+    this.sessionStore.close()
   }
 
   cleanupSync() {
-    rmSync(this.sessionDir, { recursive: true, force: true })
     if (this.lockOwned) {
       try {
         unlinkSync(runtimeLockFile)
@@ -260,8 +303,11 @@ class RunningSessionRuntime implements SessionRuntime {
       detached: process.platform !== "win32",
       env: {
         ...process.env,
-        CAPI_SESSION_ID: this.sessionId,
-        CAPI_CAPTURE_DIR: this.sessionDir,
+        CAPI_SESSION_ID: this.session?.id,
+        CAPI_SESSION_DIR: this.session?.sessionDir,
+        CAPI_SOURCE_DIR: this.session?.sourceDir,
+        CAPI_CAPTURE_DIR: this.session?.sourceDir,
+        CAPI_DATABASE_PATH: runtimeDatabasePath,
         VITE_CAPI_RUNTIME: "1",
         FORCE_COLOR: "1",
       },
@@ -280,10 +326,10 @@ class RunningSessionRuntime implements SessionRuntime {
         if (url) {
           this.browserOpened = true
           if (process.env.CAPI_NO_OPEN === "1") {
-            console.log(`Editor available at ${url}`)
+            console.log(`Editor available at ${this.initialViewUrl}`)
           } else {
-            console.log(`Opening ${url}`)
-            openBrowser(url)
+            console.log(`Opening ${this.initialViewUrl}`)
+            openBrowser(this.initialViewUrl)
           }
         }
       }
@@ -341,12 +387,109 @@ function installShutdownHandling(runtime: RunningSessionRuntime) {
   })
 }
 
-export async function startSession(): Promise<SessionRuntime> {
+function createStoredSession(sessionStore: SessionStore) {
   const sessionId = randomUUID()
-  const sessionDir = path.join(capiRoot, sessionId)
-  const runtime = new RunningSessionRuntime(sessionId, sessionDir, runtimeUrl)
+  const sessionDir = path.join(sessionsRoot, sessionId)
+  const sourceDir = path.join(sessionDir, "sources")
 
-  await runtime.start()
+  return sessionStore.createSession({ id: sessionId, sessionDir, sourceDir })
+}
+
+function resolveStartupSession(sessionStore: SessionStore, options: StartSessionOptions) {
+  if (options.grid) {
+    return { session: null, created: false }
+  }
+
+  if (options.sessionId) {
+    const session = sessionStore.sessionById(options.sessionId)
+    if (!session) {
+      throw new SessionNotFoundError(options.sessionId)
+    }
+
+    return { session, created: false }
+  }
+
+  if (options.lastSession) {
+    const lastSessionId = sessionStore.lastSessionId()
+    if (!lastSessionId) {
+      throw new SessionNotFoundError("last")
+    }
+
+    const session = sessionStore.sessionById(lastSessionId)
+    if (!session) {
+      throw new SessionNotFoundError(lastSessionId)
+    }
+
+    return { session, created: false }
+  }
+
+  return { session: createStoredSession(sessionStore), created: true }
+}
+
+type RemoteSessionResponse = {
+  session: StoredSession
+  url?: string
+}
+
+async function createSessionInRunningRuntime(lock: Partial<RuntimeLock>) {
+  const baseUrl = lock.url ?? runtimeUrl
+  const response = await fetch(new URL("/sessions", baseUrl), { method: "POST" })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: string } | null
+    throw new Error(body?.error ?? `Could not create session in running Capi runtime: ${response.status}.`)
+  }
+
+  return await response.json() as RemoteSessionResponse
+}
+
+async function delegateToRunningRuntime(lock: Partial<RuntimeLock>, options: StartSessionOptions) {
+  if (options.grid) {
+    const url = new URL(lock.url ?? runtimeUrl)
+    url.searchParams.set("view", "grid")
+    if (process.env.CAPI_NO_OPEN === "1") {
+      console.log(`Editor available at ${url.toString()}`)
+    } else {
+      console.log(`Opening ${url.toString()}`)
+      openBrowser(url.toString())
+    }
+    return
+  }
+
+  const result = await createSessionInRunningRuntime(lock)
+  const url = result.url ?? viewUrlForSession(result.session.id, lock.url ?? runtimeUrl)
+  console.log(`Capi session ${result.session.id}`)
+  console.log(`Session directory ${result.session.sessionDir}`)
+  console.log(`Source directory ${result.session.sourceDir}`)
+  if (process.env.CAPI_NO_OPEN === "1") {
+    console.log(`Editor available at ${url}`)
+  } else {
+    console.log(`Opening ${url}`)
+    openBrowser(url)
+  }
+}
+
+export async function startSession(options: StartSessionOptions = {}): Promise<SessionRuntime | null> {
+  const lock = await liveRuntimeLock()
+  if (lock) {
+    await delegateToRunningRuntime(lock, options)
+    return null
+  }
+
+  const sessionStore = new SessionStore(runtimeDatabasePath)
+  const { session, created } = resolveStartupSession(sessionStore, options)
+  const initialViewUrl = session ? viewUrlForSession(session.id) : gridViewUrl
+  const runtime = new RunningSessionRuntime(session, sessionStore, runtimeUrl, initialViewUrl)
+
+  try {
+    await runtime.start()
+  } catch (error) {
+    if (created && session) {
+      sessionStore.deleteSession(session.id)
+    }
+    sessionStore.close()
+    throw error
+  }
+
   installShutdownHandling(runtime)
 
   return runtime

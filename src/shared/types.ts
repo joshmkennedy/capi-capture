@@ -7,6 +7,43 @@ export type Source = {
   duration: number
 }
 
+export type Clip = {
+  id: string
+  sourceId: string
+  sourceStart: number
+  sourceEnd: number
+  timelineStart: number
+  color: string
+}
+
+export type SessionEditorState = {
+  clips: Clip[]
+}
+
+export type SessionSummary = {
+  id: string
+  sessionDir: string
+  sourceDir: string
+  createdAt: string
+  updatedAt: string
+  lastOpenedAt: string
+}
+
+export type SessionsResponse = {
+  sessions: SessionSummary[]
+  activeSessionId: string | null
+  lastSessionId: string | null
+}
+
+export type CurrentSessionResponse = {
+  session: SessionSummary | null
+}
+
+export type CreateSessionResponse = {
+  session: SessionSummary
+  url: string
+}
+
 export type CaptureSettings = {
   target: "display"
   displayId: number

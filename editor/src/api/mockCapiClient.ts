@@ -1,10 +1,38 @@
 import { getMockSources } from "@/sources/mockSourceProvider"
 import type { Source } from "@/sources/sourceModel"
-import type { ExportPayload, ExportResult } from "../../../src/shared/types"
+import type {
+  CreateSessionResponse,
+  ExportPayload,
+  ExportResult,
+  SessionEditorState,
+} from "../../../src/shared/types"
 import type { CapiClient } from "./capiClientTypes"
 import { postJson } from "./http"
 
+let mockEditorState: SessionEditorState = { clips: [] }
+
 export const mockCapiClient: CapiClient = {
+  async listSessions() {
+    return { sessions: [], activeSessionId: null, lastSessionId: null }
+  },
+
+  async createSession(): Promise<CreateSessionResponse> {
+    throw new Error("Sessions are only available in a Capi runtime.")
+  },
+
+  async getCurrentSession() {
+    return { session: null }
+  },
+
+  async getSessionEditorState() {
+    return mockEditorState
+  },
+
+  async saveSessionEditorState(state) {
+    mockEditorState = state
+    return mockEditorState
+  },
+
   async listSources() {
     return getMockSources()
   },

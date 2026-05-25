@@ -46,33 +46,38 @@ export function applyClipDuration(clips: Clip[], clipId: string, duration: numbe
       return { ...clip }
     }
 
+    const sourceStart = clamp(clip.sourceStart, 0, Math.max(0, duration - MIN_CLIP_SECONDS))
+    const sourceEnd = clamp(
+      clip.sourceEnd,
+      sourceStart + MIN_CLIP_SECONDS,
+      duration,
+    )
+
     return {
       ...clip,
-      sourceStart: clamp(clip.sourceStart, 0, Math.max(0, duration - MIN_CLIP_SECONDS)),
-      sourceEnd: clamp(clip.sourceEnd, MIN_CLIP_SECONDS, duration),
+      sourceStart,
+      sourceEnd,
+      timelineDuration: sourceEnd - sourceStart,
     }
   })
 
   return sequenceClips(nextClips)
 }
 
-export function moveClipBoundary(
+export function panClipSourceWindow(
   clips: Clip[],
   clipId: string,
   deltaSeconds: number,
   sourceDurationForClip: (clip: Clip) => number,
 ) {
   const nextClips = clips.map((clip) => ({ ...clip }))
-  const clipIndex = nextClips.findIndex((clip) => clip.id === clipId)
-  const previousClip = nextClips[clipIndex - 1]
+  const clip = nextClips.find((item) => item.id === clipId)
 
-  if (!previousClip) return sequenceClips(nextClips)
+  if (!clip) return sequenceClips(nextClips)
 
-  previousClip.sourceEnd = clamp(
-    previousClip.sourceEnd + deltaSeconds,
-    previousClip.sourceStart + MIN_CLIP_SECONDS,
-    sourceDurationForClip(previousClip),
-  )
+  const actualDelta = clamp(deltaSeconds, 0 - clip.sourceStart, sourceDurationForClip(clip) - clip.sourceEnd)
+  clip.sourceStart += actualDelta
+  clip.sourceEnd += actualDelta
 
   return sequenceClips(nextClips)
 }
@@ -81,32 +86,18 @@ export function trimClipStart(
   clips: Clip[],
   clipId: string,
   deltaSeconds: number,
-  sourceDurationForClip: (clip: Clip) => number,
 ) {
   const nextClips = clips.map((clip) => ({ ...clip }))
-  const clipIndex = nextClips.findIndex((clip) => clip.id === clipId)
-  const clip = nextClips[clipIndex]
-  const previousClip = nextClips[clipIndex - 1]
+  const clip = nextClips.find((item) => item.id === clipId)
 
   if (!clip) return sequenceClips(nextClips)
 
-  const minDelta = Math.max(
-    0 - clip.sourceStart,
-    previousClip
-      ? previousClip.sourceStart + MIN_CLIP_SECONDS - previousClip.sourceEnd
-      : Number.NEGATIVE_INFINITY,
-  )
-  const maxDelta = Math.min(
-    clip.sourceEnd - MIN_CLIP_SECONDS - clip.sourceStart,
-    previousClip ? sourceDurationForClip(previousClip) - previousClip.sourceEnd : Number.POSITIVE_INFINITY,
-  )
+  const minDelta = 0 - clip.sourceStart
+  const maxDelta = clip.timelineDuration - MIN_CLIP_SECONDS
   const actualDelta = clamp(deltaSeconds, minDelta, maxDelta)
 
   clip.sourceStart += actualDelta
-
-  if (previousClip) {
-    previousClip.sourceEnd += actualDelta
-  }
+  clip.timelineDuration -= actualDelta
 
   return sequenceClips(nextClips)
 }
@@ -122,11 +113,13 @@ export function trimClipEnd(
 
   if (!clip) return sequenceClips(nextClips)
 
-  clip.sourceEnd = clamp(
-    clip.sourceEnd + deltaSeconds,
-    clip.sourceStart + MIN_CLIP_SECONDS,
-    sourceDurationForClip(clip),
+  const actualDelta = clamp(
+    deltaSeconds,
+    MIN_CLIP_SECONDS - clip.timelineDuration,
+    sourceDurationForClip(clip) - clip.sourceEnd,
   )
+  clip.sourceEnd += actualDelta
+  clip.timelineDuration += actualDelta
 
   return sequenceClips(nextClips)
 }
