@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { exportPresentation } from "../export/FfmpegExporter"
+import type { PlanExportOptions } from "../export/ExportPlanner"
 import { isExportPayload } from "../shared/schemas"
 
 const EXPORT_ROUTE = "/export"
@@ -32,7 +33,7 @@ function sendJson(response: ServerResponse, statusCode: number, body: unknown) {
   response.end(JSON.stringify(body))
 }
 
-export function capiExportMiddleware(root: string) {
+export function capiExportMiddleware(root: string, options: PlanExportOptions = {}) {
   return async (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     if (!request.url?.startsWith(EXPORT_ROUTE)) {
       next()
@@ -51,7 +52,7 @@ export function capiExportMiddleware(root: string) {
         return
       }
 
-      const exportResult = await exportPresentation(root, body)
+      const exportResult = await exportPresentation(root, body, options)
       sendJson(response, 200, exportResult)
     } catch (error) {
       const message = error instanceof Error ? error.message : "Export failed."
@@ -59,4 +60,3 @@ export function capiExportMiddleware(root: string) {
     }
   }
 }
-

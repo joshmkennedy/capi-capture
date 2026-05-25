@@ -14,6 +14,12 @@ export type ExportPlan = {
   outputPath: string
 }
 
+export type ExportSourceResolver = (clip: ExportClip) => string | null | undefined
+
+export type PlanExportOptions = {
+  resolveSourcePath?: ExportSourceResolver
+}
+
 function sourceCandidates(root: string, clip: ExportClip) {
   const captureDir = process.env.CAPI_CAPTURE_DIR
   const safeFile = path.basename(clip.file)
@@ -30,7 +36,12 @@ function sourceCandidates(root: string, clip: ExportClip) {
   return candidates.filter((candidate): candidate is string => Boolean(candidate))
 }
 
-function resolveSourcePath(root: string, clip: ExportClip) {
+function resolveSourcePath(root: string, clip: ExportClip, resolver?: ExportSourceResolver) {
+  const resolvedSourcePath = resolver?.(clip)
+  if (resolvedSourcePath && existsSync(resolvedSourcePath)) {
+    return resolvedSourcePath
+  }
+
   const sourcePath = sourceCandidates(root, clip).find((candidate) => existsSync(candidate))
 
   if (!sourcePath) {
@@ -48,7 +59,7 @@ function timestampForFileName() {
   return new Date().toISOString().replace(/[:.]/g, "-")
 }
 
-export function planExport(root: string, payload: ExportPayload): ExportPlan {
+export function planExport(root: string, payload: ExportPayload, options: PlanExportOptions = {}): ExportPlan {
   const clips = [...payload.clips].sort((a, b) => a.timelineStart - b.timelineStart)
   if (clips.length === 0) {
     throw new Error("Export needs at least one clip.")
@@ -59,11 +70,10 @@ export function planExport(root: string, payload: ExportPayload): ExportPlan {
   return {
     clips: clips.map((clip) => ({
       ...clip,
-      resolvedSourcePath: resolveSourcePath(root, clip),
+      resolvedSourcePath: resolveSourcePath(root, clip, options.resolveSourcePath),
       duration: clip.sourceEnd - clip.sourceStart,
     })),
     outputName,
     outputPath: downloadsPath(outputName),
   }
 }
-

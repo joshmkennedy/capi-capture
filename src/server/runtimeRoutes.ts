@@ -1,4 +1,4 @@
-import { createReadStream } from "node:fs"
+import { createReadStream, existsSync } from "node:fs"
 import { createHash, randomUUID } from "node:crypto"
 import { mkdir, rm, stat } from "node:fs/promises"
 import type { IncomingMessage, ServerResponse } from "node:http"
@@ -251,11 +251,33 @@ async function captureSource(
 }
 
 export function capiRuntimeMiddleware(root: string) {
-  const exportMiddleware = capiExportMiddleware(root)
   let activeSession = initialActiveSession()
   const sourceRegistries = new Map<string, SourceRegistry>()
   let activeCapture: Promise<void> | null = null
   let activeScreenCapture: ActiveCapture | null = null
+
+  const exportMiddleware = capiExportMiddleware(root, {
+    resolveSourcePath(clip) {
+      const sessionClipMatch = clip.sourcePath?.match(/^\/sessions\/([^/]+)\/clips\/([^/]+)$/)
+      if (sessionClipMatch) {
+        const [, encodedSessionId, encodedFile] = sessionClipMatch
+        const sessionId = decodeURIComponent(encodedSessionId)
+        const sessionSourceDir = sessionId === activeSession?.id ? activeSession.sourceDir : sourceDirFor(sessionId)
+        const sourcePath = path.join(sessionSourceDir, path.basename(decodeURIComponent(encodedFile)))
+        if (existsSync(sourcePath)) {
+          return sourcePath
+        }
+
+        throw new Error(`Source not found for ${clip.file}.`)
+      }
+
+      if (!activeSession) {
+        return null
+      }
+
+      return path.join(activeSession.sourceDir, path.basename(clip.file))
+    },
+  })
 
   function registryFor(session: ActiveRuntimeSession) {
     const existingRegistry = sourceRegistries.get(session.id)

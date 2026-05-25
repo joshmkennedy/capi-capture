@@ -2,7 +2,7 @@ import { spawn } from "node:child_process"
 import path from "node:path"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
-import { planExport } from "./ExportPlanner"
+import { planExport, type PlanExportOptions } from "./ExportPlanner"
 import type { ExportPayload, ExportResult } from "../shared/types"
 
 function runFfmpeg(args: string[]) {
@@ -29,8 +29,12 @@ function concatFileLine(filePath: string) {
   return `file '${filePath.replaceAll("'", "'\\''")}'`
 }
 
-export async function exportPresentation(root: string, payload: ExportPayload): Promise<ExportResult> {
-  const exportPlan = planExport(root, payload)
+export async function exportPresentation(
+  root: string,
+  payload: ExportPayload,
+  options: PlanExportOptions = {},
+): Promise<ExportResult> {
+  const exportPlan = planExport(root, payload, options)
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "capi-export-"))
 
   try {
@@ -95,4 +99,3 @@ export async function exportPresentation(root: string, payload: ExportPayload): 
     await rm(tempDir, { recursive: true, force: true })
   }
 }
-
