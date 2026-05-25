@@ -65,6 +65,10 @@ export type CaptureOptions = {
   displays: CaptureDisplay[]
 }
 
+export type CaptureStatus = {
+  status: "idle" | "capturing"
+}
+
 export type ExportClip = {
   file: string
   sourcePath?: string

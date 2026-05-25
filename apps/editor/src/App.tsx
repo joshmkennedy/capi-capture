@@ -363,6 +363,48 @@ function EditorView({
     }
   }, [])
 
+  useEffect(() => {
+    if (capiClientMode !== "runtime") {
+      return
+    }
+
+    let isCurrent = true
+
+    async function syncCaptureStatus() {
+      try {
+        const status = await capiClient.getCaptureStatus()
+        if (!isCurrent) return
+
+        setCaptureState((current) => {
+          if (status.status === "capturing") {
+            return current.status === "capturing" ? current : { status: "capturing" }
+          }
+
+          return current.status === "capturing" ? { status: "idle" } : current
+        })
+      } catch (error) {
+        if (!isCurrent) return
+
+        setCaptureState((current) => (
+          current.status === "capturing"
+            ? current
+            : {
+                status: "error",
+                message: error instanceof Error ? error.message : "Could not load capture status.",
+              }
+        ))
+      }
+    }
+
+    void syncCaptureStatus()
+    const intervalId = window.setInterval(syncCaptureStatus, 1000)
+
+    return () => {
+      isCurrent = false
+      window.clearInterval(intervalId)
+    }
+  }, [])
+
   const updateClipDuration = useCallback((clipId: string, duration: number) => {
     const clip = clips.find((item) => item.id === clipId)
     if (clip) {

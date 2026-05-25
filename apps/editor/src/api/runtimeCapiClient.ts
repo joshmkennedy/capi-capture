@@ -1,6 +1,7 @@
 import type {
   CaptureOptions,
   CaptureSettings,
+  CaptureStatus,
   CreateSessionResponse,
   CurrentSessionResponse,
   DeleteSessionResponse,
@@ -90,6 +91,10 @@ export const runtimeCapiClient: CapiClient = {
     }
 
     return response.settings
+  },
+
+  async getCaptureStatus() {
+    return getJson<CaptureStatus>("/captures", "Could not load capture status.")
   },
 
   async startCapture(settings: CaptureSettings) {

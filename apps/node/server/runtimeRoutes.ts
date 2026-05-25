@@ -555,6 +555,13 @@ export function capiRuntimeMiddleware(root: string) {
     }
 
     if (requestUrl.pathname === "/captures") {
+      if (request.method === "GET") {
+        sendJson(response, 200, {
+          status: activeCapture || activeScreenCapture ? "capturing" : "idle",
+        })
+        return
+      }
+
       if (request.method === "DELETE") {
         if (!activeScreenCapture) {
           sendJson(response, 409, { error: "No capture is in progress." })
@@ -572,7 +579,7 @@ export function capiRuntimeMiddleware(root: string) {
       }
 
       if (request.method !== "POST") {
-        sendJson(response, 405, { error: "Use POST or DELETE /captures." })
+        sendJson(response, 405, { error: "Use GET, POST, or DELETE /captures." })
         return
       }
 

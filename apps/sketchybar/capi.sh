@@ -2,7 +2,7 @@
 set -euo pipefail
 
 STATUS_FILE="${CAPI_STATUS_FILE:-/tmp/capi/status.json}"
-RUNTIME_URL="${CAPI_RUNTIME_URL:-http://127.0.0.1:5173}"
+RUNTIME_URL="${CAPI_RUNTIME_URL:-http://127.0.0.1:8969}"
 NAME="${NAME:-capi}"
 
 hide_item() {

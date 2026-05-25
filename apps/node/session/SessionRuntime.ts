@@ -56,7 +56,7 @@ export class SessionNotFoundError extends Error {
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../..", import.meta.url)))
 const editorRoot = path.join(repoRoot, "apps", "editor")
-const runtimePort = 5173
+const runtimePort = 8969
 const runtimeUrl = `http://127.0.0.1:${runtimePort}/`
 const capiRoot = path.join(os.tmpdir(), "capi")
 const sessionsRoot = path.join(capiRoot, "sessions")

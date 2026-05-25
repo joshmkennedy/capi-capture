@@ -58,6 +58,10 @@ export const mockCapiClient: CapiClient = {
     return settings
   },
 
+  async getCaptureStatus() {
+    return { status: "idle" as const }
+  },
+
   async startCapture(): Promise<Source> {
     throw new Error("Capture is only available in a Capi session.")
   },

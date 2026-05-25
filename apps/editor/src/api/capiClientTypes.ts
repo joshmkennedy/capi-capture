@@ -1,6 +1,7 @@
 import type {
   CaptureOptions,
   CaptureSettings,
+  CaptureStatus,
   CreateSessionResponse,
   CurrentSessionResponse,
   DeleteSessionResponse,
@@ -23,6 +24,7 @@ export type CapiClient = {
   listCaptureOptions(): Promise<CaptureOptions>
   getCaptureSettings(): Promise<CaptureSettings | null>
   saveCaptureSettings(settings: CaptureSettings): Promise<CaptureSettings>
+  getCaptureStatus(): Promise<CaptureStatus>
   startCapture(settings: CaptureSettings): Promise<Source>
   stopCapture(): Promise<void>
   exportPresentation(payload: ExportPayload): Promise<ExportResult>
