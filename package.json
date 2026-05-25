@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "capi": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' npx tsx apps/node/main.ts",
+    "capi:kill": "npm run capi -- --kill",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

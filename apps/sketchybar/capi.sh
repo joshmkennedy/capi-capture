@@ -10,7 +10,15 @@ hide_item() {
 }
 
 if [[ "${1:-}" == "--stop" ]]; then
-  /usr/bin/curl -fsS -X DELETE "$RUNTIME_URL/captures" >/dev/null 2>&1 || true
+  response="$(/usr/bin/curl -fsS -X DELETE "$RUNTIME_URL/captures" 2>/dev/null || true)"
+  url="$(printf '%s' "$response" | /usr/bin/plutil -extract url raw -o - - 2>/dev/null || true)"
+  if [[ -n "$url" && "$url" != "null" ]]; then
+    if [[ "$url" == http://* || "$url" == https://* ]]; then
+      /usr/bin/open "$url"
+    else
+      /usr/bin/open "${RUNTIME_URL%/}${url}"
+    fi
+  fi
   sketchybar --set "$NAME" icon="󰓛" label="Stopping" drawing=on
   exit 0
 fi

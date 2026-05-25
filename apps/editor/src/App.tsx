@@ -252,6 +252,31 @@ function EditorView({
     })
   }, [persistClips])
 
+  const refreshSessionSources = useCallback(async (options: { activateNew?: boolean } = {}) => {
+    if (capiClientMode !== "runtime" || !hasLoadedEditorStateRef.current) {
+      return
+    }
+
+    const loadedSources = await capiClient.listSources(sessionId)
+    setSources(loadedSources)
+    commitClips((current) => {
+      const existingSourceIds = new Set(current.map((clip) => clip.sourceId))
+      const newClips = loadedSources
+        .filter((source) => !existingSourceIds.has(source.id))
+        .map((source, index) => clipForSource(source, current.length + index))
+
+      if (newClips.length === 0) {
+        return current
+      }
+
+      if (options.activateNew) {
+        setActiveClipId(newClips[0].id)
+      }
+
+      return sequenceClips([...current, ...newClips])
+    })
+  }, [commitClips, sessionId])
+
   const flushEditorState = useCallback(() => {
     if (capiClientMode !== "runtime" || !hasLoadedEditorStateRef.current) {
       return
@@ -286,7 +311,7 @@ function EditorView({
           await capiClient.openSession(sessionId)
         }
 
-        const loadedSources = await capiClient.listSources()
+        const loadedSources = await capiClient.listSources(sessionId)
         if (!isCurrent) return
 
         const editorState =
@@ -369,14 +394,22 @@ function EditorView({
     }
 
     let isCurrent = true
+    let wasCapturing = false
 
     async function syncCaptureStatus() {
       try {
         const status = await capiClient.getCaptureStatus()
         if (!isCurrent) return
 
+        const isCapturing = status.status === "capturing"
+        if (wasCapturing && !isCapturing) {
+          await refreshSessionSources({ activateNew: true })
+          if (!isCurrent) return
+        }
+        wasCapturing = isCapturing
+
         setCaptureState((current) => {
-          if (status.status === "capturing") {
+          if (isCapturing) {
             return current.status === "capturing" ? current : { status: "capturing" }
           }
 
@@ -403,7 +436,7 @@ function EditorView({
       isCurrent = false
       window.clearInterval(intervalId)
     }
-  }, [])
+  }, [refreshSessionSources])
 
   const updateClipDuration = useCallback((clipId: string, duration: number) => {
     const clip = clips.find((item) => item.id === clipId)

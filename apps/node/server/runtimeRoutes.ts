@@ -89,6 +89,32 @@ async function syncSessionSources(registry: SourceRegistry, session: ActiveRunti
   await registry.registerSourcesInDirectory(session.sourceDir)
 }
 
+async function sendSessionSources(
+  response: ServerResponse,
+  sessionId: string,
+  registryFor: (session: ActiveRuntimeSession) => SourceRegistry,
+) {
+  const store = await sessionStore()
+  if (!store) {
+    sendJson(response, 500, { error: "No Capi session store is available." })
+    return
+  }
+
+  try {
+    const session = store.sessionById(sessionId)
+    if (!session) {
+      sendJson(response, 404, { error: "Session not found." })
+      return
+    }
+
+    const sourceRegistry = registryFor(session)
+    await syncSessionSources(sourceRegistry, session)
+    sendJson(response, 200, sourceRegistry.listSources())
+  } finally {
+    store.close()
+  }
+}
+
 async function handleEditorStateRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -266,6 +292,7 @@ export function capiRuntimeMiddleware(root: string) {
   const sourceRegistries = new Map<string, SourceRegistry>()
   let activeCapture: Promise<void> | null = null
   let activeScreenCapture: ActiveCapture | null = null
+  let activeCaptureSession: ActiveRuntimeSession | null = null
 
   const exportMiddleware = capiExportMiddleware(root, {
     resolveSourcePath(clip) {
@@ -301,6 +328,10 @@ export function capiRuntimeMiddleware(root: string) {
     return registry
   }
 
+  function captureInProgress() {
+    return activeCapture !== null || activeScreenCapture !== null
+  }
+
   return async (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     if (!request.url) {
       next()
@@ -328,6 +359,11 @@ export function capiRuntimeMiddleware(root: string) {
 
       try {
         if (request.method === "POST") {
+          if (captureInProgress()) {
+            sendJson(response, 409, { error: "Stop the active capture before changing sessions." })
+            return
+          }
+
           const sessionId = randomUUID()
           const sessionDir = sessionDirFor(sessionId)
           const sourceDir = sourceDirFor(sessionId)
@@ -371,6 +407,11 @@ export function capiRuntimeMiddleware(root: string) {
           return
         }
 
+        if (session.id !== activeSession?.id && captureInProgress()) {
+          sendJson(response, 200, { session, url: sessionViewUrl(session.id) })
+          return
+        }
+
         await mkdir(session.sourceDir, { recursive: true })
         activeSession = session
         store.markSessionOpened(session.id)
@@ -384,6 +425,17 @@ export function capiRuntimeMiddleware(root: string) {
     const sessionEditorStateMatch = requestUrl.pathname.match(/^\/sessions\/([^/]+)\/editor-state$/)
     if (sessionEditorStateMatch) {
       await handleEditorStateRequest(request, response, decodeURIComponent(sessionEditorStateMatch[1]))
+      return
+    }
+
+    const sessionSourcesMatch = requestUrl.pathname.match(/^\/sessions\/([^/]+)\/sources$/)
+    if (sessionSourcesMatch) {
+      if (request.method !== "GET") {
+        sendJson(response, 405, { error: "Use GET /sessions/:sessionId/sources." })
+        return
+      }
+
+      await sendSessionSources(response, decodeURIComponent(sessionSourcesMatch[1]), registryFor)
       return
     }
 
@@ -408,7 +460,7 @@ export function capiRuntimeMiddleware(root: string) {
           return
         }
 
-        if (activeSession?.id === session.id && activeCapture) {
+        if (activeSession?.id === session.id && captureInProgress()) {
           sendJson(response, 409, { error: "Stop the active capture before deleting this session." })
           return
         }
@@ -557,7 +609,7 @@ export function capiRuntimeMiddleware(root: string) {
     if (requestUrl.pathname === "/captures") {
       if (request.method === "GET") {
         sendJson(response, 200, {
-          status: activeCapture || activeScreenCapture ? "capturing" : "idle",
+          status: captureInProgress() ? "capturing" : "idle",
         })
         return
       }
@@ -568,13 +620,18 @@ export function capiRuntimeMiddleware(root: string) {
           return
         }
 
+        const captureSession = activeCaptureSession ?? activeSession
         void writeRuntimeStatus({
           state: "stopping",
-          sessionId: activeSession?.id ?? null,
+          sessionId: captureSession?.id ?? null,
           message: "Stopping recording.",
         })
         activeScreenCapture.stop()
-        sendJson(response, 200, { status: "stopping" })
+        sendJson(response, 200, {
+          status: "stopping",
+          sessionId: captureSession?.id ?? null,
+          url: captureSession ? sessionViewUrl(captureSession.id) : null,
+        })
         return
       }
 
@@ -589,7 +646,7 @@ export function capiRuntimeMiddleware(root: string) {
           return
         }
 
-        if (activeCapture) {
+        if (captureInProgress()) {
           sendJson(response, 409, { error: "A capture is already in progress." })
           return
         }
@@ -610,11 +667,13 @@ export function capiRuntimeMiddleware(root: string) {
         }
 
         const sourceRegistry = registryFor(activeSession)
+        activeCaptureSession = activeSession
         activeCapture = captureSource(sourceRegistry, activeSession, settings, response, (capture) => {
           activeScreenCapture = capture
         }).finally(() => {
           activeCapture = null
           activeScreenCapture = null
+          activeCaptureSession = null
         })
         await activeCapture
       } catch (error) {

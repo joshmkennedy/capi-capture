@@ -1,9 +1,14 @@
 import {
   SessionAlreadyRunningError,
   SessionNotFoundError,
+  killRunningRuntime,
   startSession,
   type StartSessionOptions,
 } from "./session/SessionRuntime"
+
+function shouldKillRuntime(args: string[]) {
+  return args.includes("kill") || args.includes("--kill") || args.includes("stop") || args.includes("--stop")
+}
 
 function startupOptions(args: string[]): StartSessionOptions {
   const sessionFlagIndex = args.indexOf("--session")
@@ -32,7 +37,13 @@ function startupOptions(args: string[]): StartSessionOptions {
 }
 
 try {
-  const runtime = await startSession(startupOptions(process.argv.slice(2)))
+  const args = process.argv.slice(2)
+  if (shouldKillRuntime(args)) {
+    await killRunningRuntime()
+    process.exit(0)
+  }
+
+  const runtime = await startSession(startupOptions(args))
   if (runtime) {
     process.stdin.resume()
   }

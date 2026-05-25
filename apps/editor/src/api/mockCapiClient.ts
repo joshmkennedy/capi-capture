@@ -6,6 +6,7 @@ import type {
   ExportPayload,
   ExportResult,
   SessionEditorState,
+  StopCaptureResponse,
 } from "../../../node/shared/types"
 import type { CapiClient } from "./capiClientTypes"
 import { postJson } from "./http"
@@ -66,7 +67,7 @@ export const mockCapiClient: CapiClient = {
     throw new Error("Capture is only available in a Capi session.")
   },
 
-  async stopCapture() {
+  async stopCapture(): Promise<StopCaptureResponse> {
     throw new Error("Capture is only available in a Capi session.")
   },
 

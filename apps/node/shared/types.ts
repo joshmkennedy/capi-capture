@@ -69,6 +69,12 @@ export type CaptureStatus = {
   status: "idle" | "capturing"
 }
 
+export type StopCaptureResponse = {
+  status: "stopping"
+  sessionId: string | null
+  url: string | null
+}
+
 export type ExportClip = {
   file: string
   sourcePath?: string

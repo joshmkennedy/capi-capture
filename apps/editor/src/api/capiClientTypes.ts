@@ -10,6 +10,7 @@ import type {
   SessionEditorState,
   SessionsResponse,
   Source,
+  StopCaptureResponse,
 } from "../../../node/shared/types"
 
 export type CapiClient = {
@@ -20,12 +21,12 @@ export type CapiClient = {
   getCurrentSession(): Promise<CurrentSessionResponse>
   getSessionEditorState(sessionId?: string | null): Promise<SessionEditorState>
   saveSessionEditorState(state: SessionEditorState, sessionId?: string | null): Promise<SessionEditorState>
-  listSources(): Promise<Source[]>
+  listSources(sessionId?: string | null): Promise<Source[]>
   listCaptureOptions(): Promise<CaptureOptions>
   getCaptureSettings(): Promise<CaptureSettings | null>
   saveCaptureSettings(settings: CaptureSettings): Promise<CaptureSettings>
   getCaptureStatus(): Promise<CaptureStatus>
   startCapture(settings: CaptureSettings): Promise<Source>
-  stopCapture(): Promise<void>
+  stopCapture(): Promise<StopCaptureResponse>
   exportPresentation(payload: ExportPayload): Promise<ExportResult>
 }

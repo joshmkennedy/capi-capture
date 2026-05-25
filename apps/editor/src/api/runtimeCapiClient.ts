@@ -10,6 +10,7 @@ import type {
   SessionEditorState,
   SessionsResponse,
   Source,
+  StopCaptureResponse,
 } from "../../../node/shared/types"
 import type { CapiClient } from "./capiClientTypes"
 import { deleteJson, getJson, postJson, putJson } from "./http"
@@ -64,8 +65,9 @@ export const runtimeCapiClient: CapiClient = {
     )
   },
 
-  async listSources() {
-    return getJson<Source[]>("/sources", "Could not load sources.")
+  async listSources(sessionId) {
+    const url = sessionId ? `/sessions/${encodeURIComponent(sessionId)}/sources` : "/sources"
+    return getJson<Source[]>(url, "Could not load sources.")
   },
 
   async listCaptureOptions() {
@@ -102,7 +104,7 @@ export const runtimeCapiClient: CapiClient = {
   },
 
   async stopCapture() {
-    await deleteJson("/captures", "Could not stop capture.")
+    return deleteJson<StopCaptureResponse>("/captures", "Could not stop capture.")
   },
 
   async exportPresentation(payload: ExportPayload): Promise<ExportResult> {

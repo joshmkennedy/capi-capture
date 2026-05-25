@@ -143,6 +143,57 @@ async function liveRuntimeLock() {
   return null
 }
 
+function sleep(milliseconds: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds)
+  })
+}
+
+export async function killRunningRuntime() {
+  const lock = await readRuntimeLock()
+  if (typeof lock?.pid !== "number") {
+    await rm(runtimeLockFile, { force: true })
+    console.log("No Capi runtime is running.")
+    return
+  }
+
+  if (!isProcessRunning(lock.pid)) {
+    await rm(runtimeLockFile, { force: true })
+    console.log(`Removed stale Capi runtime lock for pid ${lock.pid}.`)
+    return
+  }
+
+  if (lock.pid === process.pid) {
+    throw new Error("Refusing to kill the current Capi command process.")
+  }
+
+  console.log(`Stopping Capi runtime pid ${lock.pid}.`)
+  process.kill(lock.pid, "SIGTERM")
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await sleep(100)
+    if (!isProcessRunning(lock.pid)) {
+      await rm(runtimeLockFile, { force: true })
+      console.log("Capi runtime stopped.")
+      return
+    }
+  }
+
+  console.log(`Capi runtime pid ${lock.pid} did not stop after SIGTERM; sending SIGKILL.`)
+  process.kill(lock.pid, "SIGKILL")
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await sleep(100)
+    if (!isProcessRunning(lock.pid)) {
+      await rm(runtimeLockFile, { force: true })
+      console.log("Capi runtime killed.")
+      return
+    }
+  }
+
+  throw new Error(`Could not kill Capi runtime pid ${lock.pid}.`)
+}
+
 async function acquireRuntimeLock(session: StoredSession | null) {
   await mkdir(capiRoot, { recursive: true })
 
@@ -194,6 +245,10 @@ function openBrowser(url: string) {
     console.warn(`Could not open the browser automatically. Open ${url} manually.`)
   })
   child.unref()
+}
+
+function shouldOpenInitialView(options: { immediateRecord?: boolean }) {
+  return process.env.CAPI_NO_OPEN !== "1" && options.immediateRecord !== true
 }
 
 async function killProcessGroup(child: ChildProcess | null) {
@@ -364,11 +419,11 @@ class RunningSessionRuntime implements SessionRuntime {
               })
             })
           }
-          if (process.env.CAPI_NO_OPEN === "1") {
-            console.log(`Editor available at ${this.initialViewUrl}`)
-          } else {
+          if (shouldOpenInitialView({ immediateRecord: this.immediateRecord })) {
             console.log(`Opening ${this.initialViewUrl}`)
             openBrowser(this.initialViewUrl)
+          } else {
+            console.log(`Editor available at ${this.initialViewUrl}`)
           }
         }
       }
@@ -550,11 +605,11 @@ async function delegateToRunningRuntime(lock: Partial<RuntimeLock>, options: Sta
       console.error(error instanceof Error ? error.message : error)
     })
   }
-  if (process.env.CAPI_NO_OPEN === "1") {
-    console.log(`Editor available at ${url}`)
-  } else {
+  if (shouldOpenInitialView(options)) {
     console.log(`Opening ${url}`)
     openBrowser(url)
+  } else {
+    console.log(`Editor available at ${url}`)
   }
 }
 
