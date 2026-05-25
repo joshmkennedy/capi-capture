@@ -43,7 +43,43 @@ async function syncSessionSources(registry: SourceRegistry) {
   await registry.registerSourcesInDirectory(captureDir)
 }
 
-async function serveClip(registry: SourceRegistry, requestUrl: URL, response: ServerResponse) {
+function parseRangeHeader(rangeHeader: string | undefined, size: number) {
+  const match = rangeHeader?.match(/^bytes=(\d*)-(\d*)$/)
+  if (!match) return null
+
+  const [, startValue, endValue] = match
+  if (!startValue && !endValue) return null
+
+  if (!startValue) {
+    const suffixLength = Number(endValue)
+    if (!Number.isInteger(suffixLength) || suffixLength <= 0) return null
+
+    return {
+      start: Math.max(size - suffixLength, 0),
+      end: size - 1,
+    }
+  }
+
+  const start = Number(startValue)
+  const end = endValue ? Number(endValue) : size - 1
+
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start ||
+    start >= size
+  ) {
+    return null
+  }
+
+  return {
+    start,
+    end: Math.min(end, size - 1),
+  }
+}
+
+async function serveClip(registry: SourceRegistry, request: IncomingMessage, requestUrl: URL, response: ServerResponse) {
   const captureDir = sessionCaptureDir()
   if (!captureDir) {
     sendJson(response, 404, { error: "No active capture directory." })
@@ -66,9 +102,39 @@ async function serveClip(registry: SourceRegistry, requestUrl: URL, response: Se
     return
   }
 
-  response.statusCode = 200
   response.setHeader("Content-Type", "video/quicktime")
+  response.setHeader("Accept-Ranges", "bytes")
+
+  const range = parseRangeHeader(request.headers.range, clipStat.size)
+  if (request.headers.range && !range) {
+    response.statusCode = 416
+    response.setHeader("Content-Range", `bytes */${clipStat.size}`)
+    response.end()
+    return
+  }
+
+  if (range) {
+    response.statusCode = 206
+    response.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${clipStat.size}`)
+    response.setHeader("Content-Length", String(range.end - range.start + 1))
+
+    if (request.method === "HEAD") {
+      response.end()
+      return
+    }
+
+    createReadStream(clipPath, range).pipe(response)
+    return
+  }
+
+  response.statusCode = 200
   response.setHeader("Content-Length", String(clipStat.size))
+
+  if (request.method === "HEAD") {
+    response.end()
+    return
+  }
+
   createReadStream(clipPath).pipe(response)
 }
 
@@ -176,12 +242,12 @@ export function capiRuntimeMiddleware(root: string) {
     }
 
     if (requestUrl.pathname.startsWith("/clips/")) {
-      if (request.method !== "GET") {
-        sendJson(response, 405, { error: "Use GET /clips/:file." })
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        sendJson(response, 405, { error: "Use GET or HEAD /clips/:file." })
         return
       }
 
-      await serveClip(sourceRegistry, requestUrl, response)
+      await serveClip(sourceRegistry, request, requestUrl, response)
       return
     }
 

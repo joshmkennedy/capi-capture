@@ -30,6 +30,13 @@ function clipAfter<T extends Clip>(clips: T[], clip: T) {
   return index >= 0 ? clips[index + 1] ?? null : null
 }
 
+function slotForClip(slotClipIds: Array<string | null>, preferredSlot: 0 | 1, clipId: string) {
+  if (slotClipIds[preferredSlot] === clipId) return preferredSlot
+
+  const fallbackSlot = otherSlot(preferredSlot)
+  return slotClipIds[fallbackSlot] === clipId ? fallbackSlot : null
+}
+
 export function useTimelinePreview({
   orderedClips,
   presentationDuration,
@@ -44,9 +51,6 @@ export function useTimelinePreview({
   const previewVideoRefs = useRef<Array<HTMLVideoElement | null>>([null, null])
   const loadedPreviewPathsRef = useRef<Array<string | null>>([null, null])
   const slotClipIdsRef = useRef<Array<string | null>>([null, null])
-  const slotTokensRef = useRef([0, 0])
-  const tokenCounterRef = useRef(0)
-  const activeRequestRef = useRef<{ clipId: string; slot: 0 | 1; token: number } | null>(null)
   const latestPreviewSourceTimeRef = useRef(0)
   const lastGapFrameTimeRef = useRef<number | null>(null)
 
@@ -71,14 +75,16 @@ export function useTimelinePreview({
       return
     }
 
-    if (previewSource && displayedPreviewPath === previewSource.path) {
+    if (
+      previewSource &&
+      displayedPreviewPath === previewSource.path &&
+      slotClipIdsRef.current[displayedPreviewSlot] === previewClip.id
+    ) {
       return
     }
 
-    const existingSlot = slotClipIdsRef.current.findIndex((clipId) => clipId === previewClip.id)
-    const targetSlot = existingSlot === 0 || existingSlot === 1
-      ? existingSlot
-      : otherSlot(displayedPreviewSlot)
+    const existingSlot = slotForClip(slotClipIdsRef.current, displayedPreviewSlot, previewClip.id)
+    const targetSlot = existingSlot ?? otherSlot(displayedPreviewSlot)
     const targetVideo = previewVideoRefs.current[targetSlot]
     const displayedVideo = previewVideoRefs.current[displayedPreviewSlot]
     if (!targetVideo) return
@@ -86,11 +92,7 @@ export function useTimelinePreview({
     const preparedClip = previewClip
     const preparedSource = sourceForClip(preparedClip)
     const preparedSourceTime = latestPreviewSourceTimeRef.current
-    const token = tokenCounterRef.current + 1
-    tokenCounterRef.current = token
-    slotTokensRef.current[targetSlot] = token
     slotClipIdsRef.current[targetSlot] = preparedClip.id
-    activeRequestRef.current = { clipId: preparedClip.id, slot: targetSlot, token }
 
     let cancelled = false
     let seekRequested = false
@@ -107,13 +109,10 @@ export function useTimelinePreview({
     }
 
     function isCurrentRequest() {
-      const request = activeRequestRef.current
       return (
         !cancelled &&
-        request?.clipId === preparedClip.id &&
-        request.slot === targetSlot &&
-        request.token === token &&
-        slotTokensRef.current[targetSlot] === token
+        slotClipIdsRef.current[targetSlot] === preparedClip.id &&
+        loadedPreviewPathsRef.current[targetSlot] === preparedSource.path
       )
     }
 
@@ -180,7 +179,12 @@ export function useTimelinePreview({
   ])
 
   useEffect(() => {
-    if (!previewClip || !previewSource || displayedPreviewPath !== previewSource.path) {
+    if (
+      !previewClip ||
+      !previewSource ||
+      displayedPreviewPath !== previewSource.path ||
+      slotClipIdsRef.current[displayedPreviewSlot] !== previewClip.id
+    ) {
       return
     }
 
@@ -222,9 +226,6 @@ export function useTimelinePreview({
       return
     }
 
-    const token = tokenCounterRef.current + 1
-    tokenCounterRef.current = token
-    slotTokensRef.current[preloadSlot] = token
     slotClipIdsRef.current[preloadSlot] = nextPreviewClip.id
     video.src = nextPreviewSource.path
     video.preload = "auto"
@@ -232,7 +233,12 @@ export function useTimelinePreview({
     video.load()
 
     const handleMetadata = () => {
-      if (slotTokensRef.current[preloadSlot] !== token) return
+      if (
+        slotClipIdsRef.current[preloadSlot] !== nextPreviewClip.id ||
+        loadedPreviewPathsRef.current[preloadSlot] !== nextPreviewSource.path
+      ) {
+        return
+      }
       updateClipDuration(nextPreviewClip.id, video.duration)
       seekVideo(video, nextPreviewClip.sourceStart)
     }
@@ -262,7 +268,13 @@ export function useTimelinePreview({
     function tick(frameTime: number) {
       const video = previewVideoRefs.current[displayedPreviewSlot]
 
-      if (previewClip && previewSource && displayedPreviewPath === previewSource.path && video) {
+      if (
+        previewClip &&
+        previewSource &&
+        displayedPreviewPath === previewSource.path &&
+        slotClipIdsRef.current[displayedPreviewSlot] === previewClip.id &&
+        video
+      ) {
         lastGapFrameTimeRef.current = null
 
         const clipEnd = timelineEnd(previewClip)
@@ -274,6 +286,18 @@ export function useTimelinePreview({
             setIsPlaying(false)
             setPreviewTime(presentationDuration)
           } else {
+            const nextSource = sourceForClip(nextClip)
+            const activeVideo = previewVideoRefs.current[displayedPreviewSlot]
+
+            if (activeVideo) {
+              slotClipIdsRef.current[displayedPreviewSlot] = nextClip.id
+              loadedPreviewPathsRef.current[displayedPreviewSlot] = nextSource.path
+              activeVideo.src = nextSource.path
+              activeVideo.preload = "auto"
+              activeVideo.load()
+              setIsPreviewSwitching(true)
+            }
+
             setPreviewTime(nextClip.timelineStart)
           }
 
@@ -320,6 +344,7 @@ export function useTimelinePreview({
     presentationDuration,
     previewClip,
     previewSource,
+    sourceForClip,
   ])
 
   useEffect(() => {
@@ -350,6 +375,7 @@ export function useTimelinePreview({
       nextSource &&
       video &&
       displayedPreviewPath === nextSource.path &&
+      slotClipIdsRef.current[displayedPreviewSlot] === nextClip.id &&
       Math.abs(video.currentTime - targetTime) <= 0.12
     ) {
       void video.play().then(
@@ -367,11 +393,7 @@ export function useTimelinePreview({
       const targetVideo = previewVideoRefs.current[targetSlot]
 
       if (targetVideo) {
-        const token = tokenCounterRef.current + 1
-        tokenCounterRef.current = token
-        slotTokensRef.current[targetSlot] = token
         slotClipIdsRef.current[targetSlot] = nextClip.id
-        activeRequestRef.current = { clipId: nextClip.id, slot: targetSlot, token }
 
         if (loadedPreviewPathsRef.current[targetSlot] !== nextSource.path) {
           targetVideo.src = nextSource.path
@@ -387,7 +409,12 @@ export function useTimelinePreview({
         }
 
         void targetVideo.play().then(
-          () => setIsPlaying(true),
+          () => {
+            setDisplayedPreviewSlot(targetSlot)
+            setDisplayedPreviewPath(nextSource.path)
+            setIsPreviewSwitching(false)
+            setIsPlaying(true)
+          },
           () => setIsPlaying(false),
         )
       }
