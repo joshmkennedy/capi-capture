@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Capi Brand System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --bg:#0a0f1f;
+      --ink:#f8fafc;
+      --muted:#c7c9d7;
+      --subtle:#8c91a6;
+      --line:rgba(151,164,211,.18);
+      --panel:rgba(8,14,31,.72);
+      --panel2:rgba(18,24,44,.62);
+      --orange:#ff5a1f;
+      --pink:#ff2d7a;
+      --violet:#8b5cf6;
+      --blue:#2563eb;
+      --navy:#0a0f1f;
+      --green:#00e389;
+      --red:#ff3b30;
+      --warn:#ff8a2a;
+      --radius:22px;
+      --shadow:0 24px 80px rgba(0,0,0,.45);
+      --glow:0 0 34px rgba(255,45,122,.55);
+      --gradient:linear-gradient(110deg,#ff5a1f 0%,#ff2d7a 35%,#8b5cf6 68%,#2563eb 100%);
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      min-height:100vh;
+      color:var(--ink);
+      font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      background:
+        radial-gradient(circle at 2% 15%,rgba(255,45,122,.22),transparent 28%),
+        radial-gradient(circle at 65% 2%,rgba(37,99,235,.16),transparent 28%),
+        linear-gradient(135deg,#070b18,#080d21 55%,#020511);
+    }
+    .page{
+      width:1600px;
+      min-height:900px;
+      margin:0 auto;
+      display:grid;
+      grid-template-columns:330px 1fr;
+      border-left:1px solid var(--line);
+      border-right:1px solid var(--line);
+      background:
+        radial-gradient(circle at 10% 44%,rgba(255,45,122,.12),transparent 22%),
+        radial-gradient(circle at 90% 15%,rgba(37,99,235,.13),transparent 28%);
+    }
+    .sidebar{
+      padding:74px 47px 38px;
+      border-right:1px solid var(--line);
+      background:linear-gradient(160deg,rgba(34,7,52,.22),rgba(5,9,22,.88) 58%);
+    }
+    .mark{
+      width:194px;height:194px;border-radius:44px;position:relative;overflow:hidden;
+      border:2px solid rgba(87,98,255,.45);box-shadow:0 18px 60px rgba(0,0,0,.5);
+      background:#0a0f1f;margin:0 auto 18px;
+    }
+    .mark:before,.mark:after,.s1,.s2,.s3{
+      content:"";position:absolute;border-radius:50%;filter:saturate(1.08);
+    }
+    .mark:before{width:260px;height:78px;background:var(--gradient);transform:rotate(116deg);left:18px;top:-5px;box-shadow:0 0 42px rgba(255,45,122,.7)}
+    .mark:after{width:250px;height:84px;background:linear-gradient(100deg,#ff5a1f,#ff2d7a,#121a4b);transform:rotate(151deg);left:-58px;top:96px}
+    .s1{width:240px;height:90px;background:rgba(139,92,246,.35);left:48px;top:74px;transform:rotate(-25deg)}
+    .s2{width:210px;height:70px;background:rgba(37,99,235,.34);right:-92px;bottom:28px;transform:rotate(-18deg)}
+    .s3{width:64px;height:64px;background:radial-gradient(circle,#ff5a1f,#ff2d7a 58%,transparent 60%);left:77px;top:93px;filter:blur(1px)}
+    h1{font-size:76px;line-height:.96;letter-spacing:-.07em;margin:10px 0 8px;text-align:center}
+    .tag{text-align:center;color:#ff4f67;letter-spacing:.36em;font-size:15px;margin:0 0 28px}
+    .desc{font-size:16px;color:#dde1ee;line-height:1.55;margin:0 0 20px}
+    .rule{height:1px;background:var(--line);margin:20px 0}
+    .eyebrow{font-size:13px;letter-spacing:.34em;color:#d8c7ff;margin:0 0 16px;text-transform:uppercase}
+    .trait{display:grid;grid-template-columns:28px 1fr;gap:12px;margin:14px 0}
+    .ico{font-size:26px;color:#9d61ff}
+    .trait b{display:block;font-size:15px;margin-bottom:2px}
+    .trait span{display:block;color:#c1c5d4;font-size:13px}
+    .usage{display:flex;gap:54px;align-items:center;margin-top:22px}
+    .mini{width:80px;height:80px;border-radius:18px;background:#111;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12);position:relative;overflow:hidden}
+    .mini.color:before{content:"";position:absolute;inset:-20px;background:var(--gradient);border-radius:44%;transform:rotate(120deg)}
+    .mini.mono{background:radial-gradient(circle at 20% 20%,#fff 0 12%,transparent 13%),repeating-radial-gradient(ellipse at 60% 25%,#fff 0 6px,#111 7px 16px)}
+    .usage p{text-align:center;margin:10px 0 0;color:#d4d8e5;font-size:14px}
+    .main{padding:35px 38px 28px}
+    .top{display:grid;grid-template-columns:1fr 1fr;gap:32px;border-bottom:1px solid var(--line);padding-bottom:22px}
+    .section-title{letter-spacing:.32em;color:#d8c7ff;font-size:14px;margin:0 0 22px;text-transform:uppercase}
+    .typo-grid{display:grid;grid-template-columns:140px 1fr;gap:14px;align-items:start}
+    .aa{
+      font-size:128px;font-weight:800;line-height:.85;letter-spacing:-.08em;
+      background:var(--gradient);-webkit-background-clip:text;background-clip:text;color:transparent;
+    }
+    .typo-right{display:grid;grid-template-columns:44px 1fr 64px;gap:8px 10px;align-items:center}
+    .typo-right .head{grid-column:1 / -1;display:flex;align-items:baseline;gap:14px;margin-bottom:6px}
+    .font-name{font-size:26px;font-weight:700}
+    .font-desc{color:#c7cce0;font-size:14px}
+    .label,.spec{color:#c9cedf;font-size:13px}
+    .spec{text-align:right;color:#9aa1b6}
+    .text{font-size:13px;line-height:1.25;color:#e6e9f2}
+    .text.display{font-size:19px;font-weight:700;letter-spacing:-.01em;line-height:1.1}
+    .text.h1{font-size:16px;font-weight:700;line-height:1.15}
+    .text.h2{font-size:14px;font-weight:600}
+    .text.body{font-size:13px}
+    .text.small{font-size:12px}
+    .text.cap{font-size:11px;color:#c0c4d2}
+    .palette{display:grid;gap:16px}
+    .grad{height:61px;border-radius:9px;background:var(--gradient);box-shadow:0 14px 38px rgba(0,0,0,.32)}
+    .swatches{display:flex;gap:23px}
+    .swatch{width:92px}
+    .box{height:62px;border-radius:9px;border:1px solid rgba(255,255,255,.1);background:var(--c)}
+    .hex{text-align:center;font-size:12px;color:#d8deed;margin-top:8px}
+    .neutral .box{height:49px}
+    .components{padding-top:18px}
+    .comp-grid{display:grid;grid-template-columns:1.2fr 1.2fr 1fr 1fr;gap:29px;border-bottom:1px solid var(--line);padding-bottom:22px}
+    h3{font-size:14px;margin:0 0 12px;font-weight:600}
+    .buttons{display:grid;grid-template-columns:150px 130px 105px;gap:22px 18px;align-items:center}
+    button,.btn{
+      height:44px;border-radius:8px;border:1px solid rgba(151,164,211,.25);background:transparent;color:white;
+      display:flex;align-items:center;justify-content:center;font-weight:650;font-size:14px;
+    }
+    .primary{background:var(--gradient);border:0}
+    .danger{color:#ff4a45;border-color:rgba(255,59,48,.65)}
+    .success{color:#00f09d;border-color:rgba(0,227,137,.55)}
+    .fab{width:48px;height:48px;border-radius:50%;background:var(--gradient);border:0;font-size:28px;box-shadow:var(--glow)}
+    .input{height:45px;border-radius:8px;border:1px solid rgba(151,164,211,.35);padding:7px 12px;color:#dce1ef;background:rgba(255,255,255,.02);font-size:12px;margin-bottom:11px}
+    .input.focus{border-color:#8b5cf6;box-shadow:0 0 0 1px #8b5cf6}
+    .input.disabled{opacity:.38}
+    .input small{display:block;color:#9aa1b6}
+    .checks{display:grid;gap:13px;color:#dfe3ee}
+    .checkline{display:flex;align-items:center;gap:10px}
+    .square,.radio{width:18px;height:18px;border:1px solid rgba(151,164,211,.5);display:inline-flex;align-items:center;justify-content:center}
+    .square{border-radius:4px}.radio{border-radius:50%}
+    .on{background:#8b5cf6;border-color:#8b5cf6}.radio.on{background:transparent;border:2px solid #8b5cf6}
+    .radio.on:after{content:"";width:6px;height:6px;border-radius:50%;background:#8b5cf6}
+    .toggle{width:46px;height:24px;border-radius:999px;background:#26314e;position:relative;margin-bottom:22px}
+    .toggle:after{content:"";position:absolute;width:20px;height:20px;border-radius:50%;top:2px;left:2px;background:#dfe5f2}
+    .toggle.on{background:#8b5cf6}.toggle.on:after{left:24px;background:white}
+    .lower{display:grid;grid-template-columns:1.1fr .55fr 1.4fr 1fr;gap:29px;border-bottom:1px solid var(--line);padding:18px 0 22px}
+    .card{border:1px solid rgba(151,164,211,.2);border-radius:8px;padding:14px;background:rgba(255,255,255,.02)}
+    .clip{display:grid;grid-template-columns:52px 1fr;gap:14px}
+    .wave{width:52px;height:52px;border-radius:8px;background:linear-gradient(135deg,#8b5cf6,#4d2bcb);display:flex;align-items:center;justify-content:center;font-size:28px}
+    .meta b{display:block}.meta span{font-size:13px;color:#aeb5c7}
+    .controls{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;margin-top:12px;border:1px solid rgba(151,164,211,.13);border-radius:7px;padding:8px;text-align:center}
+    .badges{display:flex;flex-wrap:wrap;gap:12px}
+    .badge{padding:4px 10px;border-radius:999px;font-size:12px;border:1px solid;background:rgba(255,255,255,.03)}
+    .purple{color:#e9d5ff;border-color:#7c3aed;background:rgba(124,58,237,.25)}
+    .green{color:#90ffd4;border-color:#00a368;background:rgba(0,227,137,.13)}
+    .red{color:#ff654f;border-color:#ff3b30;background:rgba(255,59,48,.09)}
+    .gray{color:#cbd1df;border-color:#475166}
+    .tabs{display:flex;gap:36px;border-bottom:1px solid rgba(151,164,211,.13);color:#868da2;font-size:13px}
+    .tab{padding:0 0 11px}.active{color:#fff;border-bottom:2px solid #8b5cf6}
+    .progress{margin-top:32px}.bar{height:10px;border-radius:99px;background:#131b35;overflow:hidden}.bar span{display:block;height:100%;width:62%;background:#8b5cf6;border-radius:99px}
+    .alert{height:36px;border-radius:7px;border:1px solid;padding:9px 13px;margin-bottom:12px;font-size:12px}
+    .info{border-color:#4f6dff;background:rgba(37,99,235,.13)}
+    .ok{border-color:#00a368;background:rgba(0,227,137,.1)}
+    .warn{border-color:#ff8a2a;background:rgba(255,138,42,.1)}
+    .foundation{display:grid;grid-template-columns:1.1fr .95fr 1.2fr;gap:31px;padding-top:19px}
+    .spacebars{display:flex;gap:10px;align-items:end;height:68px}
+    .spacebars div{background:#8b5cf6;border-radius:5px;min-width:14px}
+    .radii,.shadows{display:flex;gap:18px;align-items:center;margin-top:22px}
+    .rad{width:36px;height:36px;border:1px solid rgba(151,164,211,.45);background:rgba(255,255,255,.02)}
+    .full{border-radius:50%}.xl{border-radius:12px}.lg{border-radius:9px}.md{border-radius:6px}.sm{border-radius:4px}
+    .shadowbox{width:66px;height:54px;border:1px solid rgba(151,164,211,.26);border-radius:7px;background:#0b1020}
+    .shadowbox:nth-child(4){box-shadow:0 0 28px rgba(255,45,122,.48);border-color:rgba(255,45,122,.33)}
+    .foot{font-size:13px;color:#c5cada;margin-top:28px;text-align:center;letter-spacing:.02em}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <aside class="sidebar">
+      <div class="mark"><i class="s1"></i><i class="s2"></i><i class="s3"></i></div>
+      <h1>Capi</h1>
+      <p class="tag">RECORD. EDIT. SHARE.</p>
+      <p class="desc">Capi is a screen recording and editing tool for creating demos and guides with speed and clarity.</p>
+      <div class="rule"></div>
+      <p class="eyebrow">Brand Personality</p>
+      <div class="trait"><div class="ico">ϟ</div><div><b>Modern</b><span>Sleek, up-to-date, future-friendly</span></div></div>
+      <div class="trait"><div class="ico">⌁</div><div><b>Creative</b><span>Vibrant, expressive, inspiring</span></div></div>
+      <div class="trait"><div class="ico">⊙</div><div><b>Focused</b><span>Minimal, intentional, distraction-free</span></div></div>
+      <div class="trait"><div class="ico">↗</div><div><b>Empowering</b><span>Built for makers, simple to master</span></div></div>
+      <div class="rule"></div>
+      <p class="eyebrow">Usage</p>
+      <div class="usage">
+        <div><div class="mini color"></div><p>Full Color</p></div>
+        <div><div class="mini mono"></div><p>Monochrome</p></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="top">
+        <section>
+          <p class="section-title">Typography</p>
+          <div class="typo-grid">
+            <div class="aa">Aa</div>
+            <div class="typo-right">
+              <div class="head"><div class="font-name">Inter</div><div class="font-desc">Clean, modern, highly readable.</div></div>
+              <div class="label">Display</div><div class="text display">The quick brown fox jumps over the lazy dog.</div><div class="spec">52 / Bold</div>
+              <div class="label">H1</div><div class="text h1">The quick brown fox jumps over the lazy dog.</div><div class="spec">32 / Bold</div>
+              <div class="label">H2</div><div class="text h2">The quick brown fox jumps over the lazy dog.</div><div class="spec">24 / Semibold</div>
+              <div class="label">Body</div><div class="text body">The quick brown fox jumps over the lazy dog.</div><div class="spec">16 / Regular</div>
+              <div class="label">Small</div><div class="text small">The quick brown fox jumps over the lazy dog.</div><div class="spec">14 / Regular</div>
+              <div class="label">Caption</div><div class="text cap">The quick brown fox jumps over the lazy dog.</div><div class="spec">12 / Regular</div>
+            </div>
+          </div>
+        </section>
+        <section>
+          <p class="section-title">Color Palette</p>
+          <p style="margin:0 0 7px;color:#d7dbea;font-size:13px">Primary Gradient</p>
+          <div class="grad"></div>
+          <p style="margin:20px 0 10px">Primary Colors</p>
+          <div class="swatches">
+            <div class="swatch"><div class="box" style="--c:#ff5a1f"></div><div class="hex">#FF5A1F</div></div>
+            <div class="swatch"><div class="box" style="--c:#ff2d7a"></div><div class="hex">#FF2D7A</div></div>
+            <div class="swatch"><div class="box" style="--c:#8b5cf6"></div><div class="hex">#8B5CF6</div></div>
+            <div class="swatch"><div class="box" style="--c:#2563EB"></div><div class="hex">#2563EB</div></div>
+            <div class="swatch"><div class="box" style="--c:#0a0f1f"></div><div class="hex">#0A0F1F</div></div>
+          </div>
+          <p style="margin:20px 0 10px">Neutral Scale</p>
+          <div class="swatches neutral">
+            <div class="swatch"><div class="box" style="--c:#0a0f1f"></div><div class="hex">#0A0F1F</div></div>
+            <div class="swatch"><div class="box" style="--c:#111827"></div><div class="hex">#111827</div></div>
+            <div class="swatch"><div class="box" style="--c:#1f2937"></div><div class="hex">#1F2937</div></div>
+            <div class="swatch"><div class="box" style="--c:#374151"></div><div class="hex">#374151</div></div>
+            <div class="swatch"><div class="box" style="--c:#6b7280"></div><div class="hex">#6B7280</div></div>
+            <div class="swatch"><div class="box" style="--c:#d1d5db"></div><div class="hex">#D1D5DB</div></div>
+            <div class="swatch"><div class="box" style="--c:#f8fafc"></div><div class="hex">#F8FAFC</div></div>
+          </div>
+        </section>
+      </div>
+
+      <section class="components">
+        <p class="section-title">Components</p>
+        <div class="comp-grid">
+          <div>
+            <h3>Buttons</h3>
+            <div class="buttons">
+              <div class="btn primary">Primary</div><div class="btn">Secondary</div><div class="btn">Ghost</div>
+              <div class="btn danger">Destructive</div><div class="btn success">Success</div><div class="fab">+</div>
+            </div>
+          </div>
+          <div>
+            <h3>Inputs</h3>
+            <div class="input"><small>Label</small>Placeholder text</div>
+            <div class="input focus"><small>Label</small>Focused input</div>
+            <div class="input disabled"><small>Disabled</small>Disabled input</div>
+          </div>
+          <div>
+            <h3>Checkbox & Radio</h3>
+            <div class="checks">
+              <div class="checkline"><span class="square on">✓</span> Checkbox selected</div>
+              <div class="checkline"><span class="square"></span> Checkbox unselected</div>
+              <div class="checkline"><span class="radio on"></span> Radio selected</div>
+              <div class="checkline"><span class="radio"></span> Radio unselected</div>
+            </div>
+          </div>
+          <div>
+            <h3>Toggle</h3>
+            <div class="toggle on"></div>
+            <div class="toggle"></div>
+          </div>
+        </div>
+
+        <div class="lower">
+          <div>
+            <h3>Cards</h3>
+            <div class="card">
+              <div class="clip"><div class="wave">⌁</div><div class="meta"><b>Recording 1.mov</b><span>2m 14s · 12.4 MB</span><br><span>Today, 10:42 AM</span></div></div>
+              <div class="controls"><span>▷</span><span>⌘</span><span>⌕</span><span>⋯</span></div>
+            </div>
+          </div>
+          <div>
+            <h3>Badges</h3>
+            <div class="badges"><span class="badge purple">● New</span><span class="badge green">● Exported</span><span class="badge red">● Recording</span><span class="badge gray">● Draft</span></div>
+          </div>
+          <div>
+            <h3>Tabs</h3>
+            <div class="tabs"><div class="tab active">Clips</div><div class="tab">Timeline</div><div class="tab">Export</div><div class="tab">Settings</div></div>
+            <div class="progress"><p>Progress <span style="float:right">60%</span></p><div class="bar"><span></span></div></div>
+          </div>
+          <div>
+            <h3>Alerts</h3>
+            <div class="alert info">ⓘ &nbsp; Your recording is ready.</div>
+            <div class="alert ok">◎ &nbsp; Export completed successfully.</div>
+            <div class="alert warn">⚠ &nbsp; Storage is running low.</div>
+          </div>
+        </div>
+
+        <div class="foundation">
+          <div>
+            <p class="section-title">Spacing Scale (rem)</p>
+            <div class="spacebars">
+              <div style="height:12px"></div><div style="height:15px"></div><div style="height:18px"></div><div style="height:23px"></div><div style="height:28px"></div><div style="height:34px"></div><div style="height:42px"></div><div style="height:50px"></div><div style="height:58px;width:43px"></div><div style="height:64px;width:50px"></div>
+            </div>
+            <div style="display:flex;gap:21px;color:#d5d9e8;font-size:12px"><span>0</span><span>0.5</span><span>1</span><span>1.5</span><span>2</span><span>3</span><span>4</span><span>6</span><span>8</span><span>12</span></div>
+          </div>
+          <div>
+            <p class="section-title">Border Radius</p>
+            <div class="radii"><div class="rad"></div><div class="rad sm"></div><div class="rad md"></div><div class="rad lg"></div><div class="rad xl"></div><div class="rad full"></div></div>
+            <div style="display:flex;gap:30px;color:#d5d9e8;font-size:12px;margin-top:12px"><span>none</span><span>sm</span><span>md</span><span>lg</span><span>2xl</span><span>full</span></div>
+          </div>
+          <div>
+            <p class="section-title">Shadows</p>
+            <div class="shadows"><div class="shadowbox"></div><div class="shadowbox"></div><div class="shadowbox"></div><div class="shadowbox"></div></div>
+            <div style="display:flex;gap:66px;color:#d5d9e8;font-size:12px;margin-top:12px"><span>sm</span><span>md</span><span>lg</span><span>glow</span></div>
+          </div>
+        </div>
+      </section>
+      <div class="foot">Use the primary gradient sparingly for emphasis and brand touches. &nbsp;&nbsp; | &nbsp;&nbsp; Dark-first design. Accessible. Consistent. Beautiful.</div>
+    </main>
+  </div>
+</body>
+</html>
