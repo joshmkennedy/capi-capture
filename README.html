@@ -170,6 +170,11 @@
         clips, sends clip updates to the editor, and exports the final timeline with ffmpeg.
       </p>
 
+      <p>
+        Shared product and domain terms are defined in
+        <a href="docs/ubiquitous-language.md">docs/ubiquitous-language.md</a>.
+      </p>
+
       <div class="grid">
         <div class="card">
           <h3>Native capture</h3>
@@ -184,6 +189,25 @@
           <p>Trims and stitches clips into a single final video.</p>
         </div>
       </div>
+    </section>
+
+    <section>
+      <h2>Branding</h2>
+      <p>
+        Capi's brand direction is documented in
+        <a href="brand/brand-guide.html">brand/brand-guide.html</a>. The guide defines
+        the product mark, color palette, typography, component styling, and brand
+        personality for the prototype.
+      </p>
+
+      <p>Brand elements live in the <code>brand/</code> directory:</p>
+      <ul>
+        <li><a href="brand/brand-guide.html">brand/brand-guide.html</a> - visual brand system.</li>
+        <li><a href="brand/logo.png">brand/logo.png</a> - app logo.</li>
+        <li><a href="brand/favicon.png">brand/favicon.png</a> - favicon source.</li>
+        <li><a href="brand/branding.png">brand/branding.png</a> - brand overview image.</li>
+        <li><code>brand/current*.png</code> - current interface screenshots and visual references.</li>
+      </ul>
     </section>
 
     <section>
@@ -346,6 +370,84 @@ POST /export</code></pre>
         <span class="pill">ffmpeg</span>
         <span class="pill">macOS screencapture</span>
       </div>
+    </section>
+
+    <section>
+      <h2>Directory Structure</h2>
+      <p>
+        Capi should be organized as a local Node runtime with a browser editor,
+        not as a traditional distributed frontend/backend app.
+      </p>
+
+      <pre><code>capi-capture/
+  README.html
+  docs/
+    ubiquitous-language.md
+
+  brand/
+    brand-guide.html
+    logo.png
+    favicon.png
+    branding.png
+    current*.png
+
+  src/
+    main.ts
+    session/
+      SessionRuntime.ts
+      sessionPaths.ts
+      cleanup.ts
+
+    capture/
+      CaptureService.ts
+      ScreencaptureAdapter.ts
+
+    sources/
+      SourceRegistry.ts
+      SourceWatcher.ts
+      sourceMetadata.ts
+
+    timeline/
+      Timeline.ts
+      timelineSchemas.ts
+
+    export/
+      ExportPlanner.ts
+      FfmpegExporter.ts
+
+    server/
+      httpServer.ts
+      routes.ts
+      eventSocket.ts
+
+    events/
+      DomainEvents.ts
+      EventBus.ts
+
+    shared/
+      schemas.ts
+      types.ts
+
+  editor/
+    index.html
+    src/
+      App.tsx
+      api/
+        client.ts
+        events.ts
+      sources/
+        SourceList.tsx
+      timeline/
+        TimelineView.tsx
+      export/
+        ExportButton.tsx</code></pre>
+
+      <p>
+        <code>src/</code> owns the local runtime: macOS capture, temporary files,
+        source watching, API routes, WebSocket events, and ffmpeg export.
+        <code>editor/</code> owns the browser editing experience. Shared schemas
+        and types define the contract between them.
+      </p>
     </section>
 
     <section>
