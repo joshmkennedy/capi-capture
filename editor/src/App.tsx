@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  Download,
   GripVertical,
+  Loader2,
   Pause,
   Play,
   Scissors,
@@ -14,90 +16,49 @@ import {
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
+import { createExportPayload, exportPresentation } from "@/export/exportClient"
+import { getMockSources } from "@/sources/mockSourceProvider"
+import type { Source } from "@/sources/sourceModel"
+import type { Clip } from "@/timeline/clipModel"
+import { clipLength, timelineEnd } from "@/timeline/clipModel"
+import {
+  applyClipDuration,
+  clamp,
+  findClipAtTime,
+  findNextClip,
+  MIN_CLIP_SECONDS,
+  moveClipBoundary,
+  seconds,
+  sequenceClips,
+  sortClips,
+  trimClipEnd,
+  trimClipStart,
+  type DragState,
+} from "@/timeline/timelineModel"
 
-type Clip = {
-  id: string
-  title: string
-  file: string
-  path: string
-  sourcePath: string
-  duration: number
-  sourceStart: number
-  sourceEnd: number
-  timelineStart: number
-  color: string
-}
+type ExportState =
+  | { status: "idle" }
+  | { status: "exporting" }
+  | { status: "done"; message: string }
+  | { status: "error"; message: string }
 
-type DragState = {
-  clipId: string
-  mode: "move" | "trim-start" | "trim-end"
-  startX: number
-  initialSourceStart: number
-  initialSourceEnd: number
-  initialTimelineStart: number
-  initialClips: Clip[]
-}
-
-const MIN_CLIP_SECONDS = 0.5
 const PIXELS_PER_SECOND = 44
-const FALLBACK_DURATIONS = [16, 22, 12, 9]
 const CLIP_COLORS = ["#d99f3d", "#4f9a9a", "#c46f5e", "#7a83c8"]
 
-const mockSourceUrls = import.meta.glob("../mock-sources/*.mov", {
-  eager: true,
-  import: "default",
-  query: "?url",
-}) as Record<string, string>
+const initialSources = getMockSources()
+const initialClips: Clip[] = initialSources.map((source, index) => {
+  const sourceStart = index === 0 ? 0.8 : index === 2 ? 0 : 1.2
+  const sourceEnd = Math.max(sourceStart + MIN_CLIP_SECONDS, source.duration - 1)
 
-const initialClips: Clip[] = Object.entries(mockSourceUrls)
-  .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
-  .map(([sourcePath, path], index) => {
-    const file = sourcePath.split("/").pop() ?? `clip-${index + 1}.mov`
-    const duration = FALLBACK_DURATIONS[index] ?? 12
-    const sourceStart = index === 0 ? 0.8 : index === 2 ? 0 : 1.2
-    const sourceEnd = Math.max(sourceStart + MIN_CLIP_SECONDS, duration - 1)
-
-    return {
-      id: `clip-${index + 1}`,
-      title: file.replace(/\.[^.]+$/, "").replace(/[-_]/g, " "),
-      file,
-      path,
-      sourcePath: sourcePath.replace("../", "/"),
-      duration,
-      sourceStart,
-      sourceEnd,
-      timelineStart: 0,
-      color: CLIP_COLORS[index % CLIP_COLORS.length],
-    }
-  })
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max)
-}
-
-function seconds(value: number) {
-  return `${value.toFixed(1)}s`
-}
-
-function clipLength(clip: Clip) {
-  return clip.sourceEnd - clip.sourceStart
-}
-
-function sortClips(clips: Clip[]) {
-  return [...clips].sort((a, b) => a.timelineStart - b.timelineStart)
-}
-
-function timelineEnd(clip: Clip) {
-  return clip.timelineStart + clipLength(clip)
-}
-
-function findClipAtTime(clips: Clip[], time: number) {
-  return clips.find((clip) => time >= clip.timelineStart && time < timelineEnd(clip))
-}
-
-function findNextClip(clips: Clip[], time: number) {
-  return clips.find((clip) => clip.timelineStart >= time)
-}
+  return {
+    id: `clip-${index + 1}`,
+    sourceId: source.id,
+    sourceStart,
+    sourceEnd,
+    timelineStart: 0,
+    color: CLIP_COLORS[index % CLIP_COLORS.length],
+  }
+})
 
 function otherSlot(slot: 0 | 1): 0 | 1 {
   return slot === 0 ? 1 : 0
@@ -113,94 +74,8 @@ function seekVideo(video: HTMLVideoElement, time: number) {
   }
 }
 
-function sequenceClips(clips: Clip[]) {
-  let cursor = 0
-
-  return clips.map((clip) => {
-    const nextClip = { ...clip, timelineStart: cursor }
-    cursor += clipLength(clip)
-    return nextClip
-  })
-}
-
-function applyClipDuration(clips: Clip[], clipId: string, duration: number) {
-  const nextClips = clips.map((clip) => {
-    if (clip.id !== clipId || !Number.isFinite(duration) || duration <= 0) {
-      return { ...clip }
-    }
-
-    return {
-      ...clip,
-      duration,
-      sourceStart: clamp(clip.sourceStart, 0, Math.max(0, duration - MIN_CLIP_SECONDS)),
-      sourceEnd: clamp(clip.sourceEnd, MIN_CLIP_SECONDS, duration),
-    }
-  })
-
-  return sequenceClips(nextClips)
-}
-
-function moveClipBoundary(clips: Clip[], clipId: string, deltaSeconds: number) {
-  const nextClips = clips.map((clip) => ({ ...clip }))
-  const clipIndex = nextClips.findIndex((clip) => clip.id === clipId)
-  const previousClip = nextClips[clipIndex - 1]
-
-  if (!previousClip) return sequenceClips(nextClips)
-
-  previousClip.sourceEnd = clamp(
-    previousClip.sourceEnd + deltaSeconds,
-    previousClip.sourceStart + MIN_CLIP_SECONDS,
-    previousClip.duration,
-  )
-
-  return sequenceClips(nextClips)
-}
-
-function trimClipStart(clips: Clip[], clipId: string, deltaSeconds: number) {
-  const nextClips = clips.map((clip) => ({ ...clip }))
-  const clipIndex = nextClips.findIndex((clip) => clip.id === clipId)
-  const clip = nextClips[clipIndex]
-  const previousClip = nextClips[clipIndex - 1]
-
-  if (!clip) return sequenceClips(nextClips)
-
-  const minDelta = Math.max(
-    0 - clip.sourceStart,
-    previousClip
-      ? previousClip.sourceStart + MIN_CLIP_SECONDS - previousClip.sourceEnd
-      : Number.NEGATIVE_INFINITY,
-  )
-  const maxDelta = Math.min(
-    clip.sourceEnd - MIN_CLIP_SECONDS - clip.sourceStart,
-    previousClip ? previousClip.duration - previousClip.sourceEnd : Number.POSITIVE_INFINITY,
-  )
-  const actualDelta = clamp(deltaSeconds, minDelta, maxDelta)
-
-  clip.sourceStart += actualDelta
-
-  if (previousClip) {
-    previousClip.sourceEnd += actualDelta
-  }
-
-  return sequenceClips(nextClips)
-}
-
-function trimClipEnd(clips: Clip[], clipId: string, deltaSeconds: number) {
-  const nextClips = clips.map((clip) => ({ ...clip }))
-  const clip = nextClips.find((item) => item.id === clipId)
-
-  if (!clip) return sequenceClips(nextClips)
-
-  clip.sourceEnd = clamp(
-    clip.sourceEnd + deltaSeconds,
-    clip.sourceStart + MIN_CLIP_SECONDS,
-    clip.duration,
-  )
-
-  return sequenceClips(nextClips)
-}
-
 function App() {
+  const [sources, setSources] = useState<Source[]>(initialSources)
   const [clips, setClips] = useState(() => sequenceClips(initialClips))
   const [activeClipId, setActiveClipId] = useState(initialClips[0].id)
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -210,16 +85,32 @@ function App() {
   const [displayedPreviewSlot, setDisplayedPreviewSlot] = useState<0 | 1>(0)
   const [displayedPreviewPath, setDisplayedPreviewPath] = useState<string | null>(null)
   const [isPreviewSwitching, setIsPreviewSwitching] = useState(false)
+  const [exportState, setExportState] = useState<ExportState>({ status: "idle" })
   const previewVideoRefs = useRef<Array<HTMLVideoElement | null>>([null, null])
   const loadedPreviewPathsRef = useRef<Array<string | null>>([null, null])
   const latestPreviewSourceTimeRef = useRef(0)
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null)
   const lastFrameTimeRef = useRef<number | null>(null)
 
+  const sourcesById = useMemo(
+    () => new Map(sources.map((source) => [source.id, source])),
+    [sources],
+  )
+  const sourceForClip = useCallback((clip: Clip) => {
+    const source = sourcesById.get(clip.sourceId)
+    if (!source) {
+      throw new Error(`Source not found for clip ${clip.id}.`)
+    }
+
+    return source
+  }, [sourcesById])
+  const sourceDurationForClip = useCallback((clip: Clip) => sourceForClip(clip).duration, [sourceForClip])
   const activeClip = clips.find((clip) => clip.id === activeClipId) ?? clips[0]
+  const activeSource = sourceForClip(activeClip)
   const orderedClips = useMemo(() => sortClips(clips), [clips])
   const presentationDuration = Math.max(...clips.map(timelineEnd), 0)
   const previewClip = findClipAtTime(orderedClips, previewTime)
+  const previewSource = previewClip ? sourceForClip(previewClip) : null
   const previewSourceTime = previewClip
     ? previewClip.sourceStart + (previewTime - previewClip.timelineStart)
     : 0
@@ -232,6 +123,16 @@ function App() {
   )
   const timelineWidth = totalSeconds * PIXELS_PER_SECOND
   const playheadLeft = Math.min(previewTime, totalSeconds) * PIXELS_PER_SECOND
+
+  const updateClipDuration = useCallback((clipId: string, duration: number) => {
+    const clip = clips.find((item) => item.id === clipId)
+    if (clip) {
+      setSources((current) =>
+        current.map((source) => (source.id === clip.sourceId ? { ...source, duration } : source)),
+      )
+    }
+    setClips((current) => applyClipDuration(sortClips(current), clipId, duration))
+  }, [clips])
 
   useEffect(() => {
     if (previewClip && activeClipId !== previewClip.id) {
@@ -248,7 +149,7 @@ function App() {
       return
     }
 
-    if (displayedPreviewPath === previewClip.path) {
+    if (previewSource && displayedPreviewPath === previewSource.path) {
       return
     }
 
@@ -258,15 +159,16 @@ function App() {
     if (!targetVideo) return
     const preparedVideo = targetVideo
     const preparedClip = previewClip
+    const preparedSource = sourceForClip(preparedClip)
 
     let cancelled = false
     setIsPreviewSwitching(true)
     displayedVideo?.pause()
 
-    if (loadedPreviewPathsRef.current[targetSlot] !== preparedClip.path) {
-      preparedVideo.src = preparedClip.path
+    if (loadedPreviewPathsRef.current[targetSlot] !== preparedSource.path) {
+      preparedVideo.src = preparedSource.path
       preparedVideo.preload = "auto"
-      loadedPreviewPathsRef.current[targetSlot] = preparedClip.path
+      loadedPreviewPathsRef.current[targetSlot] = preparedSource.path
       preparedVideo.load()
     }
 
@@ -275,7 +177,7 @@ function App() {
 
       seekVideo(preparedVideo, latestPreviewSourceTimeRef.current)
       setDisplayedPreviewSlot(targetSlot)
-      setDisplayedPreviewPath(preparedClip.path)
+      setDisplayedPreviewPath(preparedSource.path)
       setIsPreviewSwitching(false)
 
       if (isPlaying) {
@@ -302,10 +204,18 @@ function App() {
       preparedVideo.removeEventListener("loadedmetadata", handleMetadata)
       preparedVideo.removeEventListener("canplay", activatePreparedVideo)
     }
-  }, [displayedPreviewPath, displayedPreviewSlot, isPlaying, previewClip])
+  }, [
+    displayedPreviewPath,
+    displayedPreviewSlot,
+    isPlaying,
+    previewClip,
+    previewSource,
+    sourceForClip,
+    updateClipDuration,
+  ])
 
   useEffect(() => {
-    if (!previewClip || displayedPreviewPath !== previewClip.path) {
+    if (!previewClip || !previewSource || displayedPreviewPath !== previewSource.path) {
       return
     }
 
@@ -323,29 +233,38 @@ function App() {
     if (!isPlaying && !video.paused) {
       video.pause()
     }
-  }, [displayedPreviewPath, displayedPreviewSlot, isPlaying, previewClip, previewSourceTime])
+  }, [displayedPreviewPath, displayedPreviewSlot, isPlaying, previewClip, previewSource, previewSourceTime])
 
   useEffect(() => {
+    const nextPreviewSource = nextPreviewClip ? sourceForClip(nextPreviewClip) : null
     if (
       !nextPreviewClip ||
+      !nextPreviewSource ||
       isPreviewSwitching ||
-      displayedPreviewPath === nextPreviewClip.path ||
-      (previewClip && displayedPreviewPath !== previewClip.path)
+      displayedPreviewPath === nextPreviewSource.path ||
+      (previewSource && displayedPreviewPath !== previewSource.path)
     ) {
       return
     }
 
     const preloadSlot = otherSlot(displayedPreviewSlot)
     const video = previewVideoRefs.current[preloadSlot]
-    if (!video || loadedPreviewPathsRef.current[preloadSlot] === nextPreviewClip.path) {
+    if (!video || loadedPreviewPathsRef.current[preloadSlot] === nextPreviewSource.path) {
       return
     }
 
-    video.src = nextPreviewClip.path
+    video.src = nextPreviewSource.path
     video.preload = "auto"
-    loadedPreviewPathsRef.current[preloadSlot] = nextPreviewClip.path
+    loadedPreviewPathsRef.current[preloadSlot] = nextPreviewSource.path
     video.load()
-  }, [displayedPreviewPath, displayedPreviewSlot, isPreviewSwitching, nextPreviewClip, previewClip])
+  }, [
+    displayedPreviewPath,
+    displayedPreviewSlot,
+    isPreviewSwitching,
+    nextPreviewClip,
+    previewSource,
+    sourceForClip,
+  ])
 
   useEffect(() => {
     if (!isPlaying) {
@@ -398,9 +317,6 @@ function App() {
       clipId: clip.id,
       mode,
       startX: event.clientX,
-      initialSourceStart: clip.sourceStart,
-      initialSourceEnd: clip.sourceEnd,
-      initialTimelineStart: clip.timelineStart,
       initialClips: orderedClips,
     })
   }
@@ -412,14 +328,14 @@ function App() {
 
     setClips(() => {
       if (drag.mode === "move") {
-        return moveClipBoundary(drag.initialClips, drag.clipId, deltaSeconds)
+        return moveClipBoundary(drag.initialClips, drag.clipId, deltaSeconds, sourceDurationForClip)
       }
 
       if (drag.mode === "trim-start") {
-        return trimClipStart(drag.initialClips, drag.clipId, deltaSeconds)
+        return trimClipStart(drag.initialClips, drag.clipId, deltaSeconds, sourceDurationForClip)
       }
 
-      return trimClipEnd(drag.initialClips, drag.clipId, deltaSeconds)
+      return trimClipEnd(drag.initialClips, drag.clipId, deltaSeconds, sourceDurationForClip)
     })
   }
 
@@ -466,7 +382,7 @@ function App() {
   }
 
   function nudgeClip(clipId: string, amount: number) {
-    setClips((current) => moveClipBoundary(sortClips(current), clipId, amount))
+    setClips((current) => moveClipBoundary(sortClips(current), clipId, amount, sourceDurationForClip))
   }
 
   function jumpPreviewToTrim(edge: "start" | "end") {
@@ -488,8 +404,24 @@ function App() {
     setIsPlaying(true)
   }
 
-  function updateClipDuration(clipId: string, duration: number) {
-    setClips((current) => applyClipDuration(sortClips(current), clipId, duration))
+  async function performExport() {
+    setExportState({ status: "exporting" })
+
+    const result = await exportPresentation(createExportPayload(orderedClips, sourcesById))
+
+    setExportState({
+      status: "done",
+      message: result.outputPath ? `Saved to ${result.outputPath}` : "Saved to Downloads.",
+    })
+  }
+
+  function handleExport() {
+    void performExport().catch((error) => {
+      setExportState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Export failed.",
+      })
+    })
   }
 
   return (
@@ -507,10 +439,38 @@ function App() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span>{clips.length} sources</span>
-            <span className="h-4 w-px bg-border" />
-            <span>{seconds(totalSeconds)} timeline</span>
+          <div className="flex items-center gap-3">
+            <div className="hidden min-w-0 max-w-96 text-right text-xs text-muted-foreground md:block">
+              {exportState.status === "done" || exportState.status === "error" ? (
+                <span
+                  className={cn(
+                    "block truncate",
+                    exportState.status === "error" ? "text-destructive" : "text-muted-foreground",
+                  )}
+                  title={exportState.message}
+                >
+                  {exportState.message}
+                </span>
+              ) : (
+                <span>
+                  {sources.length} sources
+                  <span className="mx-2 inline-block h-4 w-px translate-y-1 bg-border" />
+                  {seconds(totalSeconds)} timeline
+                </span>
+              )}
+            </div>
+            <Button
+              disabled={exportState.status === "exporting" || orderedClips.length === 0}
+              onClick={handleExport}
+              title="Export presentation"
+            >
+              {exportState.status === "exporting" ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <Download />
+              )}
+              {exportState.status === "exporting" ? "Exporting" : "Export"}
+            </Button>
           </div>
         </header>
 
@@ -523,63 +483,67 @@ function App() {
               </span>
             </div>
             <div className="space-y-2">
-              {orderedClips.map((clip, index) => (
-                <button
-                  key={clip.id}
-                  className={cn(
-                    "grid w-full grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border p-3 text-left transition-colors",
-                    activeClip.id === clip.id
-                      ? "border-primary bg-primary/10"
-                      : "border-border bg-card hover:bg-secondary",
-                  )}
-                  onClick={() => {
-                    setActiveClipId(clip.id)
-                    seekPreview(clip.timelineStart)
-                  }}
-                >
-                  <span
-                    className="h-full min-h-12 rounded-sm"
-                    style={{ backgroundColor: clip.color }}
-                  />
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-medium">{clip.title}</span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {clip.sourcePath}
+              {orderedClips.map((clip, index) => {
+                const source = sourceForClip(clip)
+
+                return (
+                  <button
+                    key={clip.id}
+                    className={cn(
+                      "grid w-full grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border p-3 text-left transition-colors",
+                      activeClip.id === clip.id
+                        ? "border-primary bg-primary/10"
+                        : "border-border bg-card hover:bg-secondary",
+                    )}
+                    onClick={() => {
+                      setActiveClipId(clip.id)
+                      seekPreview(clip.timelineStart)
+                    }}
+                  >
+                    <span
+                      className="h-full min-h-12 rounded-sm"
+                      style={{ backgroundColor: clip.color }}
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium">{source.title}</span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {source.sourcePath}
+                      </span>
+                      <span className="mt-2 flex gap-2 text-xs text-muted-foreground">
+                        <span>{seconds(clip.sourceStart)}</span>
+                        <span>to</span>
+                        <span>{seconds(clip.sourceEnd)}</span>
+                      </span>
                     </span>
-                    <span className="mt-2 flex gap-2 text-xs text-muted-foreground">
-                      <span>{seconds(clip.sourceStart)}</span>
-                      <span>to</span>
-                      <span>{seconds(clip.sourceEnd)}</span>
+                    <span className="grid gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={index === 0}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          reorderClip(clip.id, -1)
+                        }}
+                        title="Move earlier"
+                      >
+                        <ArrowUp />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={index === orderedClips.length - 1}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          reorderClip(clip.id, 1)
+                        }}
+                        title="Move later"
+                      >
+                        <ArrowDown />
+                      </Button>
                     </span>
-                  </span>
-                  <span className="grid gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      disabled={index === 0}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        reorderClip(clip.id, -1)
-                      }}
-                      title="Move earlier"
-                    >
-                      <ArrowUp />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      disabled={index === orderedClips.length - 1}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        reorderClip(clip.id, 1)
-                      }}
-                      title="Move later"
-                    >
-                      <ArrowDown />
-                    </Button>
-                  </span>
-                </button>
-              ))}
+                  </button>
+                )
+              })}
             </div>
           </aside>
 
@@ -604,7 +568,9 @@ function App() {
                       preload="auto"
                       onLoadedMetadata={(event) => {
                         const loadedPath = loadedPreviewPathsRef.current[slot]
-                        const loadedClip = orderedClips.find((clip) => clip.path === loadedPath)
+                        const loadedClip = orderedClips.find(
+                          (clip) => sourceForClip(clip).path === loadedPath,
+                        )
                         if (loadedClip) {
                           updateClipDuration(loadedClip.id, event.currentTarget.duration)
                         }
@@ -639,7 +605,7 @@ function App() {
                   <div className="mb-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
                     <span className="font-mono text-foreground">{seconds(previewTime)}</span>
                     <span className="min-w-0 truncate">
-                      {previewClip ? previewClip.title : "Timeline gap"}
+                      {previewSource ? previewSource.title : "Timeline gap"}
                     </span>
                     <span className="font-mono">{seconds(presentationDuration)}</span>
                   </div>
@@ -674,9 +640,9 @@ function App() {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div>
-                      <div className="truncate text-sm font-medium">{activeClip.title}</div>
+                      <div className="truncate text-sm font-medium">{activeSource.title}</div>
                       <div className="mt-1 truncate text-xs text-muted-foreground">
-                        {activeClip.sourcePath}
+                        {activeSource.sourcePath}
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-xs">
@@ -715,8 +681,8 @@ function App() {
                       {JSON.stringify(
                         {
                           clips: orderedClips.map((clip) => ({
-                            file: clip.file,
-                            sourcePath: clip.sourcePath,
+                            file: sourceForClip(clip).file,
+                            sourcePath: sourceForClip(clip).sourcePath,
                             sourceStart: Number(clip.sourceStart.toFixed(2)),
                             sourceEnd: Number(clip.sourceEnd.toFixed(2)),
                             timelineStart: Number(clip.timelineStart.toFixed(2)),
@@ -821,7 +787,7 @@ function App() {
                         </button>
                         <div className="flex h-full min-w-0 items-center gap-2 px-5 text-left text-xs font-semibold text-white">
                           <Play className="size-3 shrink-0" />
-                          <span className="truncate">{clip.file}</span>
+                          <span className="truncate">{sourceForClip(clip).file}</span>
                           <span className="ml-auto shrink-0 font-mono text-[11px]">
                             {seconds(clipLength(clip))}
                           </span>
