@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
   GripVertical,
+  Pause,
   Play,
   Scissors,
   SkipBack,
@@ -19,6 +20,7 @@ type Clip = {
   title: string
   file: string
   path: string
+  sourcePath: string
   duration: number
   sourceStart: number
   sourceEnd: number
@@ -38,53 +40,36 @@ type DragState = {
 
 const MIN_CLIP_SECONDS = 0.5
 const PIXELS_PER_SECOND = 44
+const FALLBACK_DURATIONS = [16, 22, 12, 9]
+const CLIP_COLORS = ["#d99f3d", "#4f9a9a", "#c46f5e", "#7a83c8"]
 
-const initialClips: Clip[] = [
-  {
-    id: "clip-1",
-    title: "Intro capture",
-    file: "1.mov",
-    path: "/clips/1.mov",
-    duration: 16,
-    sourceStart: 0.8,
-    sourceEnd: 13.2,
-    timelineStart: 0,
-    color: "#d99f3d",
-  },
-  {
-    id: "clip-2",
-    title: "Workflow pass",
-    file: "2.mov",
-    path: "/clips/2.mov",
-    duration: 22,
-    sourceStart: 2.1,
-    sourceEnd: 19.5,
-    timelineStart: 12.6,
-    color: "#4f9a9a",
-  },
-  {
-    id: "clip-3",
-    title: "Result closeup",
-    file: "3.mov",
-    path: "/clips/3.mov",
-    duration: 12,
-    sourceStart: 0,
-    sourceEnd: 10.4,
-    timelineStart: 30.5,
-    color: "#c46f5e",
-  },
-  {
-    id: "clip-4",
-    title: "Notes pickup",
-    file: "4.mov",
-    path: "/clips/4.mov",
-    duration: 9,
-    sourceStart: 1.2,
-    sourceEnd: 8.1,
-    timelineStart: 41.2,
-    color: "#7a83c8",
-  },
-]
+const mockSourceUrls = import.meta.glob("../mock-sources/*.mov", {
+  eager: true,
+  import: "default",
+  query: "?url",
+}) as Record<string, string>
+
+const initialClips: Clip[] = Object.entries(mockSourceUrls)
+  .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
+  .map(([sourcePath, path], index) => {
+    const file = sourcePath.split("/").pop() ?? `clip-${index + 1}.mov`
+    const duration = FALLBACK_DURATIONS[index] ?? 12
+    const sourceStart = index === 0 ? 0.8 : index === 2 ? 0 : 1.2
+    const sourceEnd = Math.max(sourceStart + MIN_CLIP_SECONDS, duration - 1)
+
+    return {
+      id: `clip-${index + 1}`,
+      title: file.replace(/\.[^.]+$/, "").replace(/[-_]/g, " "),
+      file,
+      path,
+      sourcePath: sourcePath.replace("../", "/"),
+      duration,
+      sourceStart,
+      sourceEnd,
+      timelineStart: 0,
+      color: CLIP_COLORS[index % CLIP_COLORS.length],
+    }
+  })
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
@@ -102,6 +87,18 @@ function sortClips(clips: Clip[]) {
   return [...clips].sort((a, b) => a.timelineStart - b.timelineStart)
 }
 
+function timelineEnd(clip: Clip) {
+  return clip.timelineStart + clipLength(clip)
+}
+
+function findClipAtTime(clips: Clip[], time: number) {
+  return clips.find((clip) => time >= clip.timelineStart && time < timelineEnd(clip))
+}
+
+function findNextClip(clips: Clip[], time: number) {
+  return clips.find((clip) => clip.timelineStart >= time)
+}
+
 function sequenceClips(clips: Clip[]) {
   let cursor = 0
 
@@ -110,6 +107,23 @@ function sequenceClips(clips: Clip[]) {
     cursor += clipLength(clip)
     return nextClip
   })
+}
+
+function applyClipDuration(clips: Clip[], clipId: string, duration: number) {
+  const nextClips = clips.map((clip) => {
+    if (clip.id !== clipId || !Number.isFinite(duration) || duration <= 0) {
+      return { ...clip }
+    }
+
+    return {
+      ...clip,
+      duration,
+      sourceStart: clamp(clip.sourceStart, 0, Math.max(0, duration - MIN_CLIP_SECONDS)),
+      sourceEnd: clamp(clip.sourceEnd, MIN_CLIP_SECONDS, duration),
+    }
+  })
+
+  return sequenceClips(nextClips)
 }
 
 function moveClipBoundary(clips: Clip[], clipId: string, deltaSeconds: number) {
@@ -176,14 +190,101 @@ function App() {
   const [clips, setClips] = useState(() => sequenceClips(initialClips))
   const [activeClipId, setActiveClipId] = useState(initialClips[0].id)
   const [drag, setDrag] = useState<DragState | null>(null)
+  const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false)
+  const [previewTime, setPreviewTime] = useState(0)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const timelineScrollerRef = useRef<HTMLDivElement | null>(null)
+  const loadedPreviewPathRef = useRef<string | null>(null)
+  const lastFrameTimeRef = useRef<number | null>(null)
 
   const activeClip = clips.find((clip) => clip.id === activeClipId) ?? clips[0]
   const orderedClips = useMemo(() => sortClips(clips), [clips])
+  const presentationDuration = Math.max(...clips.map(timelineEnd), 0)
+  const previewClip = findClipAtTime(orderedClips, previewTime)
+  const previewSourceTime = previewClip
+    ? previewClip.sourceStart + (previewTime - previewClip.timelineStart)
+    : 0
   const totalSeconds = Math.max(
     55,
     ...clips.map((clip) => clip.timelineStart + clipLength(clip) + 4),
   )
   const timelineWidth = totalSeconds * PIXELS_PER_SECOND
+  const playheadLeft = Math.min(previewTime, totalSeconds) * PIXELS_PER_SECOND
+
+  useEffect(() => {
+    if (previewClip && activeClipId !== previewClip.id) {
+      setActiveClipId(previewClip.id)
+    }
+  }, [activeClipId, previewClip])
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+
+    if (!previewClip) {
+      video.pause()
+      video.removeAttribute("src")
+      loadedPreviewPathRef.current = null
+      return
+    }
+
+    if (loadedPreviewPathRef.current !== previewClip.path) {
+      video.src = previewClip.path
+      loadedPreviewPathRef.current = previewClip.path
+      video.load()
+    }
+
+    if (Math.abs(video.currentTime - previewSourceTime) > 0.08) {
+      video.currentTime = previewSourceTime
+    }
+
+    if (isPlaying && video.paused) {
+      void video.play().catch(() => setIsPlaying(false))
+    }
+
+    if (!isPlaying && !video.paused) {
+      video.pause()
+    }
+  }, [isPlaying, previewClip, previewSourceTime])
+
+  useEffect(() => {
+    if (!isPlaying) {
+      lastFrameTimeRef.current = null
+      return
+    }
+
+    let frameId = 0
+
+    function tick(frameTime: number) {
+      const previousFrameTime = lastFrameTimeRef.current ?? frameTime
+      const elapsedSeconds = (frameTime - previousFrameTime) / 1000
+      lastFrameTimeRef.current = frameTime
+
+      setPreviewTime((currentTime) => {
+        const nextTime = currentTime + elapsedSeconds
+        const nextClip = findClipAtTime(orderedClips, nextTime) ?? findNextClip(orderedClips, nextTime)
+
+        if (nextTime >= presentationDuration || !nextClip) {
+          setIsPlaying(false)
+          return presentationDuration
+        }
+
+        return Math.max(nextTime, nextClip.timelineStart)
+      })
+
+      frameId = requestAnimationFrame(tick)
+    }
+
+    frameId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frameId)
+  }, [isPlaying, orderedClips, presentationDuration])
+
+  useEffect(() => {
+    if (previewTime > presentationDuration) {
+      setPreviewTime(presentationDuration)
+    }
+  }, [presentationDuration, previewTime])
 
   function beginDrag(
     event: React.PointerEvent,
@@ -193,6 +294,7 @@ function App() {
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
     setActiveClipId(clip.id)
+    setPreviewTime(clip.timelineStart)
     setDrag({
       clipId: clip.id,
       mode,
@@ -222,6 +324,36 @@ function App() {
     })
   }
 
+  function getTimelinePointerTime(event: React.PointerEvent) {
+    const scroller = timelineScrollerRef.current
+    if (!scroller) return previewTime
+
+    const rect = scroller.getBoundingClientRect()
+    const pointerX = event.clientX - rect.left + scroller.scrollLeft
+
+    return clamp(pointerX / PIXELS_PER_SECOND, 0, presentationDuration)
+  }
+
+  function beginPlayheadDrag(event: React.PointerEvent) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setIsPlaying(false)
+    setIsDraggingPlayhead(true)
+    seekPreview(getTimelinePointerTime(event))
+  }
+
+  function updatePlayheadDrag(event: React.PointerEvent) {
+    if (!isDraggingPlayhead) return
+
+    event.preventDefault()
+    seekPreview(getTimelinePointerTime(event))
+  }
+
+  function endPlayheadDrag() {
+    setIsDraggingPlayhead(false)
+  }
+
   function reorderClip(clipId: string, direction: -1 | 1) {
     const index = orderedClips.findIndex((clip) => clip.id === clipId)
     const targetIndex = index + direction
@@ -239,9 +371,26 @@ function App() {
   }
 
   function jumpPreviewToTrim(edge: "start" | "end") {
-    const video = document.querySelector<HTMLVideoElement>("#preview-player")
-    if (!video || !activeClip) return
-    video.currentTime = edge === "start" ? activeClip.sourceStart : activeClip.sourceEnd
+    if (!activeClip) return
+    setPreviewTime(edge === "start" ? activeClip.timelineStart : timelineEnd(activeClip))
+  }
+
+  function seekPreview(time: number) {
+    setPreviewTime(clamp(time, 0, presentationDuration))
+  }
+
+  function togglePlayback() {
+    if (isPlaying) {
+      setIsPlaying(false)
+      return
+    }
+
+    setPreviewTime((currentTime) => (currentTime >= presentationDuration ? 0 : currentTime))
+    setIsPlaying(true)
+  }
+
+  function updateClipDuration(clipId: string, duration: number) {
+    setClips((current) => applyClipDuration(sortClips(current), clipId, duration))
   }
 
   return (
@@ -255,7 +404,7 @@ function App() {
             <div>
               <h1 className="text-base font-semibold tracking-normal">Capi Editor</h1>
               <p className="text-xs text-muted-foreground">
-                Local timeline POC, hardcoded sources
+                Local timeline POC, mock sources
               </p>
             </div>
           </div>
@@ -284,7 +433,10 @@ function App() {
                       ? "border-primary bg-primary/10"
                       : "border-border bg-card hover:bg-secondary",
                   )}
-                  onClick={() => setActiveClipId(clip.id)}
+                  onClick={() => {
+                    setActiveClipId(clip.id)
+                    seekPreview(clip.timelineStart)
+                  }}
                 >
                   <span
                     className="h-full min-h-12 rounded-sm"
@@ -293,7 +445,7 @@ function App() {
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium">{clip.title}</span>
                     <span className="block truncate text-xs text-muted-foreground">
-                      {clip.path}
+                      {clip.sourcePath}
                     </span>
                     <span className="mt-2 flex gap-2 text-xs text-muted-foreground">
                       <span>{seconds(clip.sourceStart)}</span>
@@ -334,14 +486,66 @@ function App() {
 
           <section className="grid min-h-0 grid-rows-[minmax(0,1fr)_300px]">
             <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_300px] gap-4 overflow-hidden p-4">
-              <div className="min-h-0">
-                <video
-                  id="preview-player"
-                  key={activeClip.id}
-                  className="h-full max-h-[calc(100vh-410px)] min-h-80 w-full rounded-lg border border-border bg-black object-contain"
-                  src={activeClip.path}
-                  controls
-                />
+              <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-lg border border-border bg-black">
+                <div className="relative min-h-80">
+                  <video
+                    ref={videoRef}
+                    className="h-full max-h-[calc(100vh-458px)] min-h-80 w-full bg-black object-contain"
+                    playsInline
+                    muted
+                    onLoadedMetadata={(event) => {
+                      if (previewClip) {
+                        updateClipDuration(previewClip.id, event.currentTarget.duration)
+                      }
+                    }}
+                    onEnded={() => {
+                      const nextClip = findNextClip(orderedClips, previewTime + 0.01)
+                      if (!nextClip) {
+                        setIsPlaying(false)
+                        setPreviewTime(presentationDuration)
+                        return
+                      }
+
+                      setPreviewTime(nextClip.timelineStart)
+                    }}
+                  />
+                  {!previewClip ? (
+                    <div className="absolute inset-0 grid place-items-center bg-black text-sm text-muted-foreground">
+                      No clip at {seconds(previewTime)}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="border-t border-border bg-[#111318] p-3">
+                  <div className="mb-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span className="font-mono text-foreground">{seconds(previewTime)}</span>
+                    <span className="min-w-0 truncate">
+                      {previewClip ? previewClip.title : "Timeline gap"}
+                    </span>
+                    <span className="font-mono">{seconds(presentationDuration)}</span>
+                  </div>
+                  <div className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2">
+                    <Button variant="secondary" size="icon" onClick={togglePlayback} title={isPlaying ? "Pause" : "Play"}>
+                      {isPlaying ? <Pause /> : <Play />}
+                    </Button>
+                    <input
+                      className="h-2 min-w-0 accent-primary"
+                      type="range"
+                      min={0}
+                      max={Math.max(presentationDuration, MIN_CLIP_SECONDS)}
+                      step={0.01}
+                      value={previewTime}
+                      onChange={(event) => seekPreview(Number(event.currentTarget.value))}
+                      aria-label="Timeline position"
+                    />
+                    <Button variant="outline" size="icon" onClick={() => seekPreview(0)} title="Start">
+                      <SkipBack />
+                    </Button>
+                    <Button variant="outline" size="icon" onClick={() => seekPreview(presentationDuration)} title="End">
+                      <SkipForward />
+                    </Button>
+                  </div>
+                </div>
               </div>
 
               <div className="min-h-0 space-y-4 overflow-y-auto">
@@ -353,7 +557,7 @@ function App() {
                     <div>
                       <div className="truncate text-sm font-medium">{activeClip.title}</div>
                       <div className="mt-1 truncate text-xs text-muted-foreground">
-                        {activeClip.path}
+                        {activeClip.sourcePath}
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-xs">
@@ -393,6 +597,7 @@ function App() {
                         {
                           clips: orderedClips.map((clip) => ({
                             file: clip.file,
+                            sourcePath: clip.sourcePath,
                             sourceStart: Number(clip.sourceStart.toFixed(2)),
                             sourceEnd: Number(clip.sourceEnd.toFixed(2)),
                             timelineStart: Number(clip.timelineStart.toFixed(2)),
@@ -419,15 +624,45 @@ function App() {
               </div>
 
               <div
+                ref={timelineScrollerRef}
                 className="h-[256px] overflow-auto"
-                onPointerMove={updateDrag}
-                onPointerUp={() => setDrag(null)}
-                onPointerCancel={() => setDrag(null)}
+                onPointerMove={(event) => {
+                  updateDrag(event)
+                  updatePlayheadDrag(event)
+                }}
+                onPointerUp={() => {
+                  setDrag(null)
+                  endPlayheadDrag()
+                }}
+                onPointerCancel={() => {
+                  setDrag(null)
+                  endPlayheadDrag()
+                }}
               >
                 <div className="relative h-full" style={{ width: timelineWidth }}>
                   <TimelineRuler seconds={totalSeconds} />
                   <div className="absolute left-0 right-0 top-12 h-px bg-border" />
                   <div className="absolute left-0 right-0 top-12 h-[96px] bg-[linear-gradient(to_right,rgba(255,255,255,0.055)_1px,transparent_1px)] bg-[length:44px_100%]" />
+                  <div
+                    className="absolute left-0 right-0 top-0 z-10 h-14 cursor-ew-resize"
+                    onPointerDown={beginPlayheadDrag}
+                    onPointerMove={updatePlayheadDrag}
+                    onPointerUp={endPlayheadDrag}
+                    onPointerCancel={endPlayheadDrag}
+                    title="Seek timeline"
+                  />
+                  <div
+                    className="pointer-events-none absolute bottom-0 top-0 z-20 w-px bg-primary"
+                    style={{ left: playheadLeft }}
+                    role="slider"
+                    aria-label="Timeline playhead"
+                    aria-valuemin={0}
+                    aria-valuemax={presentationDuration}
+                    aria-valuenow={previewTime}
+                    tabIndex={0}
+                  >
+                    <div className="absolute -left-2 top-10 h-0 w-0 border-x-8 border-t-8 border-x-transparent border-t-primary" />
+                  </div>
 
                   {orderedClips.map((clip) => {
                     const left = clip.timelineStart * PIXELS_PER_SECOND
@@ -450,7 +685,10 @@ function App() {
                           backgroundColor: clip.color,
                         }}
                         onPointerDown={(event) => beginDrag(event, clip, "move")}
-                        onClick={() => setActiveClipId(clip.id)}
+                        onClick={() => {
+                          setActiveClipId(clip.id)
+                          seekPreview(clip.timelineStart)
+                        }}
                       >
                         <button
                           className="absolute left-0 top-0 flex h-full w-4 cursor-ew-resize items-center justify-center rounded-l-md bg-black/30"
