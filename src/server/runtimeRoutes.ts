@@ -1,12 +1,10 @@
 import { spawn } from "node:child_process"
 import { createReadStream } from "node:fs"
-import { readdir, stat } from "node:fs/promises"
+import { stat } from "node:fs/promises"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import path from "node:path"
 import { capiExportMiddleware } from "./exportRoute"
-import type { Source } from "../shared/types"
-
-const FALLBACK_SOURCE_DURATION = 12
+import { SourceRegistry } from "../sources/SourceRegistry"
 
 function sendJson(response: ServerResponse, statusCode: number, body: unknown) {
   response.statusCode = statusCode
@@ -14,55 +12,38 @@ function sendJson(response: ServerResponse, statusCode: number, body: unknown) {
   response.end(JSON.stringify(body))
 }
 
-function sourceTitle(file: string) {
-  return file.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ")
-}
-
 function sessionCaptureDir() {
   return process.env.CAPI_CAPTURE_DIR
 }
 
-function sourceFromFile(file: string): Source {
-  const id = file.replace(/\.[^.]+$/, "")
-  const sourcePath = `/clips/${encodeURIComponent(file)}`
-
-  return {
-    id,
-    title: sourceTitle(file),
-    file,
-    path: sourcePath,
-    sourcePath,
-    duration: FALLBACK_SOURCE_DURATION,
-  }
-}
-
-async function listSessionSources() {
+async function syncSessionSources(registry: SourceRegistry) {
   const captureDir = sessionCaptureDir()
   if (!captureDir) {
-    return []
+    return
   }
 
-  const files = await readdir(captureDir).catch(() => [])
-
-  return files
-    .filter((file) => file.toLowerCase().endsWith(".mov"))
-    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
-    .map(sourceFromFile)
+  await registry.registerSourcesInDirectory(captureDir)
 }
 
-async function serveClip(requestUrl: URL, response: ServerResponse) {
+async function serveClip(registry: SourceRegistry, requestUrl: URL, response: ServerResponse) {
   const captureDir = sessionCaptureDir()
   if (!captureDir) {
     sendJson(response, 404, { error: "No active capture directory." })
     return
   }
 
-  const encodedFile = requestUrl.pathname.slice("/clips/".length)
-  const file = path.basename(decodeURIComponent(encodedFile))
-  const clipPath = path.join(captureDir, file)
+  await syncSessionSources(registry)
+
+  const source = registry.sourceForUrlPath(requestUrl.pathname)
+  if (!source) {
+    sendJson(response, 404, { error: "Source not found." })
+    return
+  }
+
+  const clipPath = source.filePath
   const clipStat = await stat(clipPath).catch(() => null)
 
-  if (!clipStat?.isFile() || !file.toLowerCase().endsWith(".mov")) {
+  if (!clipStat?.isFile() || !source.file.toLowerCase().endsWith(".mov")) {
     sendJson(response, 404, { error: "Source not found." })
     return
   }
@@ -95,7 +76,7 @@ function runScreencapture(outputPath: string) {
   })
 }
 
-async function captureSource(response: ServerResponse) {
+async function captureSource(registry: SourceRegistry, response: ServerResponse) {
   const captureDir = sessionCaptureDir()
   if (!captureDir) {
     sendJson(response, 500, { error: "No active capture directory." })
@@ -108,12 +89,14 @@ async function captureSource(response: ServerResponse) {
   }
 
   const file = `${Date.now()}.mov`
-  await runScreencapture(path.join(captureDir, file))
-  sendJson(response, 200, sourceFromFile(file))
+  const filePath = path.join(captureDir, file)
+  await runScreencapture(filePath)
+  sendJson(response, 200, registry.sourceForEditor(registry.registerSource(filePath)))
 }
 
 export function capiRuntimeMiddleware(root: string) {
   const exportMiddleware = capiExportMiddleware(root)
+  const sourceRegistry = new SourceRegistry()
 
   return async (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     if (!request.url) {
@@ -129,7 +112,8 @@ export function capiRuntimeMiddleware(root: string) {
         return
       }
 
-      sendJson(response, 200, await listSessionSources())
+      await syncSessionSources(sourceRegistry)
+      sendJson(response, 200, sourceRegistry.listSources())
       return
     }
 
@@ -139,7 +123,7 @@ export function capiRuntimeMiddleware(root: string) {
         return
       }
 
-      await serveClip(requestUrl, response)
+      await serveClip(sourceRegistry, requestUrl, response)
       return
     }
 
@@ -150,7 +134,7 @@ export function capiRuntimeMiddleware(root: string) {
       }
 
       try {
-        await captureSource(response)
+        await captureSource(sourceRegistry, response)
       } catch (error) {
         const message = error instanceof Error ? error.message : "Capture failed."
         sendJson(response, 500, { error: message })

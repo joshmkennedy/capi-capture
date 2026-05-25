@@ -183,5 +183,3 @@ a browser editor served by the local runtime.
 - Agent-facing terminology guidance is mirrored in `AGENT.md`.
 - The README documents the intended local-runtime/browser-editor architecture.
 - Brand direction and visual references live under the brand assets directory.
-- The current implementation has already begun extracting runtime export behavior and editor modules; future work should preserve the working proof of concept while continuing those extractions.
-- The next architectural milestone is not a larger feature. It is making the current editor/export path cleanly express the agreed Source, Clip, Timeline, Presentation, and local runtime boundaries.
