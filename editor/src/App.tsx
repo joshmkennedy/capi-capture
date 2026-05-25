@@ -12,19 +12,20 @@ import {
   Scissors,
   SkipBack,
   SkipForward,
+  Video,
 } from "lucide-react"
+import { capiClient, capiClientMode } from "@/api/capiClient"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
-import { createExportPayload, exportPresentation } from "@/export/exportClient"
-import { getMockSources } from "@/sources/mockSourceProvider"
+import { createExportPayload } from "@/export/exportClient"
+import { useTimelinePreview } from "@/preview/useTimelinePreview"
 import type { Source } from "@/sources/sourceModel"
 import type { Clip } from "@/timeline/clipModel"
 import { clipLength, timelineEnd } from "@/timeline/clipModel"
 import {
   applyClipDuration,
   clamp,
-  findClipAtTime,
   findNextClip,
   MIN_CLIP_SECONDS,
   moveClipBoundary,
@@ -42,11 +43,20 @@ type ExportState =
   | { status: "done"; message: string }
   | { status: "error"; message: string }
 
+type LoadState =
+  | { status: "loading" }
+  | { status: "ready" }
+  | { status: "error"; message: string }
+
+type CaptureState =
+  | { status: "idle" }
+  | { status: "capturing" }
+  | { status: "error"; message: string }
+
 const PIXELS_PER_SECOND = 44
 const CLIP_COLORS = ["#d99f3d", "#4f9a9a", "#c46f5e", "#7a83c8"]
 
-const initialSources = getMockSources()
-const initialClips: Clip[] = initialSources.map((source, index) => {
+function clipForSource(source: Source, index: number): Clip {
   const sourceStart = index === 0 ? 0.8 : index === 2 ? 0 : 1.2
   const sourceEnd = Math.max(sourceStart + MIN_CLIP_SECONDS, source.duration - 1)
 
@@ -58,39 +68,22 @@ const initialClips: Clip[] = initialSources.map((source, index) => {
     timelineStart: 0,
     color: CLIP_COLORS[index % CLIP_COLORS.length],
   }
-})
-
-function otherSlot(slot: 0 | 1): 0 | 1 {
-  return slot === 0 ? 1 : 0
 }
 
-function seekVideo(video: HTMLVideoElement, time: number) {
-  if (Number.isFinite(time)) {
-    try {
-      video.currentTime = time
-    } catch {
-      // Some browsers reject seeks before media metadata is fully available.
-    }
-  }
+function clipsForSources(sources: Source[]) {
+  return sequenceClips(sources.map(clipForSource))
 }
 
 function App() {
-  const [sources, setSources] = useState<Source[]>(initialSources)
-  const [clips, setClips] = useState(() => sequenceClips(initialClips))
-  const [activeClipId, setActiveClipId] = useState(initialClips[0].id)
+  const [sources, setSources] = useState<Source[]>([])
+  const [clips, setClips] = useState<Clip[]>([])
+  const [activeClipId, setActiveClipId] = useState<string | null>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false)
-  const [previewTime, setPreviewTime] = useState(0)
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [displayedPreviewSlot, setDisplayedPreviewSlot] = useState<0 | 1>(0)
-  const [displayedPreviewPath, setDisplayedPreviewPath] = useState<string | null>(null)
-  const [isPreviewSwitching, setIsPreviewSwitching] = useState(false)
+  const [loadState, setLoadState] = useState<LoadState>({ status: "loading" })
+  const [captureState, setCaptureState] = useState<CaptureState>({ status: "idle" })
   const [exportState, setExportState] = useState<ExportState>({ status: "idle" })
-  const previewVideoRefs = useRef<Array<HTMLVideoElement | null>>([null, null])
-  const loadedPreviewPathsRef = useRef<Array<string | null>>([null, null])
-  const latestPreviewSourceTimeRef = useRef(0)
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null)
-  const lastFrameTimeRef = useRef<number | null>(null)
 
   const sourcesById = useMemo(
     () => new Map(sources.map((source) => [source.id, source])),
@@ -105,24 +98,45 @@ function App() {
     return source
   }, [sourcesById])
   const sourceDurationForClip = useCallback((clip: Clip) => sourceForClip(clip).duration, [sourceForClip])
-  const activeClip = clips.find((clip) => clip.id === activeClipId) ?? clips[0]
-  const activeSource = sourceForClip(activeClip)
+  const activeClip = (activeClipId ? clips.find((clip) => clip.id === activeClipId) : null) ?? clips[0] ?? null
+  const activeSource = activeClip ? sourceForClip(activeClip) : null
   const orderedClips = useMemo(() => sortClips(clips), [clips])
   const presentationDuration = Math.max(...clips.map(timelineEnd), 0)
-  const previewClip = findClipAtTime(orderedClips, previewTime)
-  const previewSource = previewClip ? sourceForClip(previewClip) : null
-  const previewSourceTime = previewClip
-    ? previewClip.sourceStart + (previewTime - previewClip.timelineStart)
-    : 0
-  const nextPreviewClip = previewClip
-    ? findNextClip(orderedClips, timelineEnd(previewClip) + 0.001)
-    : findNextClip(orderedClips, previewTime)
   const totalSeconds = Math.max(
     55,
     ...clips.map((clip) => clip.timelineStart + clipLength(clip) + 4),
   )
   const timelineWidth = totalSeconds * PIXELS_PER_SECOND
-  const playheadLeft = Math.min(previewTime, totalSeconds) * PIXELS_PER_SECOND
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function loadSources() {
+      try {
+        const loadedSources = await capiClient.listSources()
+        if (!isCurrent) return
+
+        const loadedClips = clipsForSources(loadedSources)
+        setSources(loadedSources)
+        setClips(loadedClips)
+        setActiveClipId(loadedClips[0]?.id ?? null)
+        setLoadState({ status: "ready" })
+      } catch (error) {
+        if (!isCurrent) return
+
+        setLoadState({
+          status: "error",
+          message: error instanceof Error ? error.message : "Could not load sources.",
+        })
+      }
+    }
+
+    void loadSources()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
 
   const updateClipDuration = useCallback((clipId: string, duration: number) => {
     const clip = clips.find((item) => item.id === clipId)
@@ -134,175 +148,32 @@ function App() {
     setClips((current) => applyClipDuration(sortClips(current), clipId, duration))
   }, [clips])
 
+  const {
+    displayedPreviewSlot,
+    isPlaying,
+    isPreviewSwitching,
+    loadedPreviewPathsRef,
+    previewClip,
+    previewSource,
+    previewTime,
+    previewVideoRefs,
+    seekPreview,
+    setIsPlaying,
+    setPreviewTime,
+    togglePlayback,
+  } = useTimelinePreview({
+    orderedClips,
+    presentationDuration,
+    sourceForClip,
+    updateClipDuration,
+  })
+  const playheadLeft = Math.min(previewTime, totalSeconds) * PIXELS_PER_SECOND
+
   useEffect(() => {
     if (previewClip && activeClipId !== previewClip.id) {
       setActiveClipId(previewClip.id)
     }
   }, [activeClipId, previewClip])
-
-  latestPreviewSourceTimeRef.current = previewSourceTime
-
-  useEffect(() => {
-    if (!previewClip) {
-      previewVideoRefs.current.forEach((video) => video?.pause())
-      setIsPreviewSwitching(false)
-      return
-    }
-
-    if (previewSource && displayedPreviewPath === previewSource.path) {
-      return
-    }
-
-    const targetSlot = otherSlot(displayedPreviewSlot)
-    const targetVideo = previewVideoRefs.current[targetSlot]
-    const displayedVideo = previewVideoRefs.current[displayedPreviewSlot]
-    if (!targetVideo) return
-    const preparedVideo = targetVideo
-    const preparedClip = previewClip
-    const preparedSource = sourceForClip(preparedClip)
-
-    let cancelled = false
-    setIsPreviewSwitching(true)
-    displayedVideo?.pause()
-
-    if (loadedPreviewPathsRef.current[targetSlot] !== preparedSource.path) {
-      preparedVideo.src = preparedSource.path
-      preparedVideo.preload = "auto"
-      loadedPreviewPathsRef.current[targetSlot] = preparedSource.path
-      preparedVideo.load()
-    }
-
-    function activatePreparedVideo() {
-      if (cancelled) return
-
-      seekVideo(preparedVideo, latestPreviewSourceTimeRef.current)
-      setDisplayedPreviewSlot(targetSlot)
-      setDisplayedPreviewPath(preparedSource.path)
-      setIsPreviewSwitching(false)
-
-      if (isPlaying) {
-        void preparedVideo.play().catch(() => setIsPlaying(false))
-      }
-    }
-
-    const handleMetadata = () => {
-      updateClipDuration(preparedClip.id, preparedVideo.duration)
-      seekVideo(preparedVideo, latestPreviewSourceTimeRef.current)
-    }
-
-    preparedVideo.addEventListener("loadedmetadata", handleMetadata, { once: true })
-    preparedVideo.addEventListener("canplay", activatePreparedVideo, { once: true })
-
-    if (preparedVideo.readyState >= 3) {
-      activatePreparedVideo()
-    } else if (preparedVideo.readyState >= 1) {
-      seekVideo(preparedVideo, latestPreviewSourceTimeRef.current)
-    }
-
-    return () => {
-      cancelled = true
-      preparedVideo.removeEventListener("loadedmetadata", handleMetadata)
-      preparedVideo.removeEventListener("canplay", activatePreparedVideo)
-    }
-  }, [
-    displayedPreviewPath,
-    displayedPreviewSlot,
-    isPlaying,
-    previewClip,
-    previewSource,
-    sourceForClip,
-    updateClipDuration,
-  ])
-
-  useEffect(() => {
-    if (!previewClip || !previewSource || displayedPreviewPath !== previewSource.path) {
-      return
-    }
-
-    const video = previewVideoRefs.current[displayedPreviewSlot]
-    if (!video) return
-
-    if (Math.abs(video.currentTime - previewSourceTime) > 0.08) {
-      seekVideo(video, previewSourceTime)
-    }
-
-    if (isPlaying && video.paused) {
-      void video.play().catch(() => setIsPlaying(false))
-    }
-
-    if (!isPlaying && !video.paused) {
-      video.pause()
-    }
-  }, [displayedPreviewPath, displayedPreviewSlot, isPlaying, previewClip, previewSource, previewSourceTime])
-
-  useEffect(() => {
-    const nextPreviewSource = nextPreviewClip ? sourceForClip(nextPreviewClip) : null
-    if (
-      !nextPreviewClip ||
-      !nextPreviewSource ||
-      isPreviewSwitching ||
-      displayedPreviewPath === nextPreviewSource.path ||
-      (previewSource && displayedPreviewPath !== previewSource.path)
-    ) {
-      return
-    }
-
-    const preloadSlot = otherSlot(displayedPreviewSlot)
-    const video = previewVideoRefs.current[preloadSlot]
-    if (!video || loadedPreviewPathsRef.current[preloadSlot] === nextPreviewSource.path) {
-      return
-    }
-
-    video.src = nextPreviewSource.path
-    video.preload = "auto"
-    loadedPreviewPathsRef.current[preloadSlot] = nextPreviewSource.path
-    video.load()
-  }, [
-    displayedPreviewPath,
-    displayedPreviewSlot,
-    isPreviewSwitching,
-    nextPreviewClip,
-    previewSource,
-    sourceForClip,
-  ])
-
-  useEffect(() => {
-    if (!isPlaying) {
-      lastFrameTimeRef.current = null
-      return
-    }
-
-    let frameId = 0
-
-    function tick(frameTime: number) {
-      const previousFrameTime = lastFrameTimeRef.current ?? frameTime
-      const elapsedSeconds = (frameTime - previousFrameTime) / 1000
-      lastFrameTimeRef.current = frameTime
-
-      setPreviewTime((currentTime) => {
-        const nextTime = currentTime + elapsedSeconds
-        const nextClip = findClipAtTime(orderedClips, nextTime) ?? findNextClip(orderedClips, nextTime)
-
-        if (nextTime >= presentationDuration || !nextClip) {
-          setIsPlaying(false)
-          return presentationDuration
-        }
-
-        return Math.max(nextTime, nextClip.timelineStart)
-      })
-
-      frameId = requestAnimationFrame(tick)
-    }
-
-    frameId = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(frameId)
-  }, [isPlaying, orderedClips, presentationDuration])
-
-  useEffect(() => {
-    if (previewTime > presentationDuration) {
-      setPreviewTime(presentationDuration)
-    }
-  }, [presentationDuration, previewTime])
 
   function beginDrag(
     event: React.PointerEvent,
@@ -390,24 +261,36 @@ function App() {
     setPreviewTime(edge === "start" ? activeClip.timelineStart : timelineEnd(activeClip))
   }
 
-  function seekPreview(time: number) {
-    setPreviewTime(clamp(time, 0, presentationDuration))
+  async function performCapture() {
+    setCaptureState({ status: "capturing" })
+
+    const source = await capiClient.startCapture()
+
+    setSources((current) => {
+      const withoutDuplicate = current.filter((item) => item.id !== source.id)
+      return [...withoutDuplicate, source]
+    })
+    setClips((current) => {
+      const nextClip = clipForSource(source, current.length)
+      setActiveClipId(nextClip.id)
+      return sequenceClips([...current, nextClip])
+    })
+    setCaptureState({ status: "idle" })
   }
 
-  function togglePlayback() {
-    if (isPlaying) {
-      setIsPlaying(false)
-      return
-    }
-
-    setPreviewTime((currentTime) => (currentTime >= presentationDuration ? 0 : currentTime))
-    setIsPlaying(true)
+  function handleCapture() {
+    void performCapture().catch((error) => {
+      setCaptureState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Capture failed.",
+      })
+    })
   }
 
   async function performExport() {
     setExportState({ status: "exporting" })
 
-    const result = await exportPresentation(createExportPayload(orderedClips, sourcesById))
+    const result = await capiClient.exportPresentation(createExportPayload(orderedClips, sourcesById))
 
     setExportState({
       status: "done",
@@ -435,7 +318,7 @@ function App() {
             <div>
               <h1 className="text-base font-semibold tracking-normal">Capi Editor</h1>
               <p className="text-xs text-muted-foreground">
-                Local timeline POC, mock sources
+                {capiClientMode === "runtime" ? "Capi session" : "Standalone editor, mock sources"}
               </p>
             </div>
           </div>
@@ -471,6 +354,15 @@ function App() {
               )}
               {exportState.status === "exporting" ? "Exporting" : "Export"}
             </Button>
+            <Button
+              variant="secondary"
+              disabled={capiClientMode !== "runtime" || captureState.status === "capturing"}
+              onClick={handleCapture}
+              title={capiClientMode === "runtime" ? "Record source" : "Capture is available in a Capi session"}
+            >
+              {captureState.status === "capturing" ? <Loader2 className="animate-spin" /> : <Video />}
+              {captureState.status === "capturing" ? "Recording" : "Record"}
+            </Button>
           </div>
         </header>
 
@@ -483,6 +375,26 @@ function App() {
               </span>
             </div>
             <div className="space-y-2">
+              {loadState.status === "loading" ? (
+                <div className="rounded-lg border border-border bg-card p-3 text-sm text-muted-foreground">
+                  Loading sources...
+                </div>
+              ) : null}
+              {loadState.status === "error" ? (
+                <div className="rounded-lg border border-destructive/50 bg-card p-3 text-sm text-destructive">
+                  {loadState.message}
+                </div>
+              ) : null}
+              {captureState.status === "error" ? (
+                <div className="rounded-lg border border-destructive/50 bg-card p-3 text-sm text-destructive">
+                  {captureState.message}
+                </div>
+              ) : null}
+              {loadState.status === "ready" && orderedClips.length === 0 ? (
+                <div className="rounded-lg border border-border bg-card p-3 text-sm text-muted-foreground">
+                  No sources yet.
+                </div>
+              ) : null}
               {orderedClips.map((clip, index) => {
                 const source = sourceForClip(clip)
 
@@ -491,7 +403,7 @@ function App() {
                     key={clip.id}
                     className={cn(
                       "grid w-full grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border p-3 text-left transition-colors",
-                      activeClip.id === clip.id
+                      activeClip?.id === clip.id
                         ? "border-primary bg-primary/10"
                         : "border-border bg-card hover:bg-secondary",
                     )}
@@ -640,31 +552,31 @@ function App() {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div>
-                      <div className="truncate text-sm font-medium">{activeSource.title}</div>
+                      <div className="truncate text-sm font-medium">{activeSource?.title ?? "No active clip"}</div>
                       <div className="mt-1 truncate text-xs text-muted-foreground">
-                        {activeSource.sourcePath}
+                        {activeSource?.sourcePath ?? "Load or record a source to begin."}
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-xs">
-                      <Metric label="Source in" value={seconds(activeClip.sourceStart)} />
-                      <Metric label="Source out" value={seconds(activeClip.sourceEnd)} />
-                      <Metric label="Timeline" value={seconds(activeClip.timelineStart)} />
-                      <Metric label="Length" value={seconds(clipLength(activeClip))} />
+                      <Metric label="Source in" value={activeClip ? seconds(activeClip.sourceStart) : "--"} />
+                      <Metric label="Source out" value={activeClip ? seconds(activeClip.sourceEnd) : "--"} />
+                      <Metric label="Timeline" value={activeClip ? seconds(activeClip.timelineStart) : "--"} />
+                      <Metric label="Length" value={activeClip ? seconds(clipLength(activeClip)) : "--"} />
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      <Button variant="outline" size="sm" onClick={() => jumpPreviewToTrim("start")}>
+                      <Button variant="outline" size="sm" disabled={!activeClip} onClick={() => jumpPreviewToTrim("start")}>
                         <SkipBack />
                         In
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => jumpPreviewToTrim("end")}>
+                      <Button variant="outline" size="sm" disabled={!activeClip} onClick={() => jumpPreviewToTrim("end")}>
                         <SkipForward />
                         Out
                       </Button>
-                      <Button variant="secondary" size="sm" onClick={() => nudgeClip(activeClip.id, -0.5)}>
+                      <Button variant="secondary" size="sm" disabled={!activeClip} onClick={() => activeClip ? nudgeClip(activeClip.id, -0.5) : undefined}>
                         <ArrowLeft />
                         0.5s
                       </Button>
-                      <Button variant="secondary" size="sm" onClick={() => nudgeClip(activeClip.id, 0.5)}>
+                      <Button variant="secondary" size="sm" disabled={!activeClip} onClick={() => activeClip ? nudgeClip(activeClip.id, 0.5) : undefined}>
                         <ArrowRight />
                         0.5s
                       </Button>
@@ -759,7 +671,7 @@ function App() {
                         key={clip.id}
                         className={cn(
                           "absolute h-11 cursor-grab select-none rounded-md border shadow-sm active:cursor-grabbing",
-                          activeClip.id === clip.id
+                          activeClip?.id === clip.id
                             ? "border-primary ring-2 ring-primary/40"
                             : "border-black/30",
                         )}

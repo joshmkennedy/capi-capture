@@ -1,0 +1,12 @@
+{
+  "name": "capi-capture",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "capi": "npx tsx src/main.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.3"
+  }
+}
