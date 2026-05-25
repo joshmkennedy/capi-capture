@@ -156,7 +156,7 @@ a browser editor served by the local runtime.
 - Runtime capture stop should be exposed through a runtime API rather than relying on the user to find the macOS menu bar stop control.
 - The capture API may need to accept capture setup options, such as display ID, rectangle, microphone, and click visibility.
 - Runtime export should be exposed through `POST /export`.
-- Session source files should be served by the runtime, for example through `/clips/:file`.
+- Session source files should be served by the runtime through `/sessions/:sessionId/clips/:file`.
 - Timeline behavior should be a deep editor module with a small interface for sequencing, trimming, finding clips by time, and applying source duration updates.
 - Preview playback should be separated from the main editor component because it owns video element orchestration, source-time seeking, playback state, and clip transitions.
 - Browser-side export should go through `CapiClient`; payload creation may remain a small editor helper, but the component should not know whether export is mocked or runtime-backed.

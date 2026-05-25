@@ -286,7 +286,7 @@
         <li>Execute ffmpeg export jobs.</li>
       </ul>
 
-      <pre><code>GET  /clips/:filename
+      <pre><code>GET  /sessions/:sessionId/clips/:filename
 WS   /events
 POST /export</code></pre>
 
@@ -328,7 +328,7 @@ POST /export</code></pre>
   "type": "clip-added",
   "clip": {
     "id": "2",
-    "path": "/clips/2.mov"
+    "path": "/sessions/&lt;session-id&gt;/clips/2.mov"
   }
 }</code></pre>
     </section>

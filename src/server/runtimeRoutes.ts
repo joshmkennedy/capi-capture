@@ -174,57 +174,6 @@ function parseRangeHeader(rangeHeader: string | undefined, size: number) {
   }
 }
 
-async function serveClip(registry: SourceRegistry, request: IncomingMessage, requestUrl: URL, response: ServerResponse) {
-  const source = registry.sourceForUrlPath(requestUrl.pathname)
-  if (!source) {
-    sendJson(response, 404, { error: "Source not found." })
-    return
-  }
-
-  const clipPath = source.filePath
-  const clipStat = await stat(clipPath).catch(() => null)
-
-  if (!clipStat?.isFile() || !source.file.toLowerCase().endsWith(".mov")) {
-    sendJson(response, 404, { error: "Source not found." })
-    return
-  }
-
-  response.setHeader("Content-Type", "video/quicktime")
-  response.setHeader("Accept-Ranges", "bytes")
-
-  const range = parseRangeHeader(request.headers.range, clipStat.size)
-  if (request.headers.range && !range) {
-    response.statusCode = 416
-    response.setHeader("Content-Range", `bytes */${clipStat.size}`)
-    response.end()
-    return
-  }
-
-  if (range) {
-    response.statusCode = 206
-    response.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${clipStat.size}`)
-    response.setHeader("Content-Length", String(range.end - range.start + 1))
-
-    if (request.method === "HEAD") {
-      response.end()
-      return
-    }
-
-    createReadStream(clipPath, range).pipe(response)
-    return
-  }
-
-  response.statusCode = 200
-  response.setHeader("Content-Length", String(clipStat.size))
-
-  if (request.method === "HEAD") {
-    response.end()
-    return
-  }
-
-  createReadStream(clipPath).pipe(response)
-}
-
 async function serveSessionClip(request: IncomingMessage, requestUrl: URL, response: ServerResponse) {
   const store = await sessionStore()
   const source = store?.sessionForSourcePath(requestUrl.pathname)
@@ -569,23 +518,6 @@ export function capiRuntimeMiddleware(root: string) {
       }
 
       await serveSessionClip(request, requestUrl, response)
-      return
-    }
-
-    if (requestUrl.pathname.startsWith("/clips/")) {
-      if (request.method !== "GET" && request.method !== "HEAD") {
-        sendJson(response, 405, { error: "Use GET or HEAD /clips/:file." })
-        return
-      }
-
-      if (!activeSession) {
-        sendJson(response, 404, { error: "No active session." })
-        return
-      }
-
-      const sourceRegistry = registryFor(activeSession)
-      await syncSessionSources(sourceRegistry, activeSession)
-      await serveClip(sourceRegistry, request, requestUrl, response)
       return
     }
 

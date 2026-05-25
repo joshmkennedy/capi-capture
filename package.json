@@ -4,9 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "capi": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' npx tsx src/main.ts"
+    "capi": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' npx tsx src/main.ts",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "tsx": "^4.22.3"
+    "@types/node": "^25.9.1",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
   }
 }

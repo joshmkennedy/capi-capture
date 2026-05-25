@@ -42,7 +42,6 @@ function publicSource({ filePath: _filePath, registeredAt: _registeredAt, ...sou
 export class SourceRegistry {
   private readonly sourcesById = new Map<string, RegisteredSource>()
   private readonly sourceIdsByFilePath = new Map<string, string>()
-  private readonly sourceIdsByUrlPath = new Map<string, string>()
 
   constructor(private readonly options: SourceRegistryOptions = {}) {}
 
@@ -69,7 +68,6 @@ export class SourceRegistry {
 
     this.sourcesById.set(id, source)
     this.sourceIdsByFilePath.set(resolvedFilePath, id)
-    this.sourceIdsByUrlPath.set(urlPath, id)
 
     return source
   }
@@ -103,11 +101,6 @@ export class SourceRegistry {
 
   sourceForEditor(source: RegisteredSource): Source {
     return publicSource(source)
-  }
-
-  sourceForUrlPath(urlPath: string) {
-    const id = this.sourceIdsByUrlPath.get(urlPath)
-    return id ? this.sourcesById.get(id) ?? null : null
   }
 
   updateDuration(id: string, duration: number) {
