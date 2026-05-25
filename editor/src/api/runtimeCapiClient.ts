@@ -3,6 +3,7 @@ import type {
   CaptureSettings,
   CreateSessionResponse,
   CurrentSessionResponse,
+  DeleteSessionResponse,
   ExportPayload,
   ExportResult,
   SessionEditorState,
@@ -25,17 +26,38 @@ export const runtimeCapiClient: CapiClient = {
     return postJson<CreateSessionResponse>("/sessions", null, "Could not create session.")
   },
 
+  async openSession(sessionId) {
+    return postJson<CreateSessionResponse>(
+      `/sessions/${encodeURIComponent(sessionId)}/open`,
+      null,
+      "Could not open session.",
+    )
+  },
+
+  async deleteSession(sessionId) {
+    return deleteJson<DeleteSessionResponse>(
+      `/sessions/${encodeURIComponent(sessionId)}`,
+      "Could not delete session.",
+    )
+  },
+
   async getCurrentSession() {
     return getJson<CurrentSessionResponse>("/session", "Could not load the active session.")
   },
 
-  async getSessionEditorState() {
-    return getJson<SessionEditorState>("/session/editor-state", "Could not load session editor state.")
+  async getSessionEditorState(sessionId) {
+    const url = sessionId
+      ? `/sessions/${encodeURIComponent(sessionId)}/editor-state`
+      : "/session/editor-state"
+    return getJson<SessionEditorState>(url, "Could not load session editor state.")
   },
 
-  async saveSessionEditorState(state) {
+  async saveSessionEditorState(state, sessionId) {
+    const url = sessionId
+      ? `/sessions/${encodeURIComponent(sessionId)}/editor-state`
+      : "/session/editor-state"
     return putJson<SessionEditorState>(
-      "/session/editor-state",
+      url,
       { state },
       "Could not save session editor state.",
     )

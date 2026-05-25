@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs"
-import { randomUUID } from "node:crypto"
-import { mkdir, stat } from "node:fs/promises"
+import { createHash, randomUUID } from "node:crypto"
+import { mkdir, rm, stat } from "node:fs/promises"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import os from "node:os"
 import path from "node:path"
@@ -38,7 +38,26 @@ function sourceDirFor(sessionId: string) {
 }
 
 function sessionViewUrl(sessionId: string) {
-  return `/?sessionId=${encodeURIComponent(sessionId)}`
+  return `/app/sessions/${encodeURIComponent(sessionId)}`
+}
+
+function sessionImageSvg(sessionId: string) {
+  const hash = createHash("sha256").update(sessionId).digest("hex")
+  const hueA = Number.parseInt(hash.slice(0, 2), 16)
+  const hueB = Number.parseInt(hash.slice(2, 4), 16)
+  const hueC = Number.parseInt(hash.slice(4, 6), 16)
+  const shortId = sessionId.slice(0, 8)
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img" aria-label="Session ${shortId}">
+  <rect width="960" height="540" fill="hsl(${hueA}, 28%, 12%)"/>
+  <rect x="48" y="56" width="864" height="428" rx="28" fill="hsl(${hueB}, 34%, 18%)" stroke="rgba(255,255,255,0.14)" stroke-width="2"/>
+  <path d="M96 352 C212 238 316 430 450 288 C588 142 690 330 864 196 L864 484 L96 484 Z" fill="hsl(${hueC}, 48%, 42%)" opacity="0.72"/>
+  <path d="M96 390 C228 280 328 454 468 326 C620 188 724 372 864 250" fill="none" stroke="rgba(255,255,255,0.36)" stroke-width="10" stroke-linecap="round"/>
+  <g fill="rgba(255,255,255,0.84)" font-family="Inter, ui-sans-serif, system-ui" font-weight="700">
+    <text x="96" y="132" font-size="34">Capi Session</text>
+    <text x="96" y="176" font-size="22" opacity="0.72">${shortId}</text>
+  </g>
+</svg>`
 }
 
 async function sessionStore() {
@@ -67,6 +86,56 @@ async function readJsonBody(request: IncomingMessage) {
 
 async function syncSessionSources(registry: SourceRegistry, session: ActiveRuntimeSession) {
   await registry.registerSourcesInDirectory(session.sourceDir)
+}
+
+async function handleEditorStateRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  sessionId: string,
+) {
+  const store = await sessionStore()
+  if (!store) {
+    sendJson(response, 500, { error: "No Capi session store is available." })
+    return
+  }
+
+  try {
+    const session = store.sessionById(sessionId)
+    if (!session) {
+      sendJson(response, 404, { error: "Session not found." })
+      return
+    }
+
+    if (request.method === "GET") {
+      sendJson(response, 200, store.readEditorState(session.id))
+      return
+    }
+
+    if (request.method === "PUT" || request.method === "POST") {
+      const body = await readJsonBody(request).catch(() => undefined)
+      if (body === undefined) {
+        sendJson(response, 400, { error: "Session editor state must be valid JSON." })
+        return
+      }
+
+      const state = body && typeof body === "object" && "state" in body
+        ? (body as { state?: unknown }).state
+        : body
+
+      if (!isSessionEditorState(state)) {
+        sendJson(response, 400, { error: "Session editor state is required." })
+        return
+      }
+
+      store.writeEditorState(session.id, state)
+      sendJson(response, 200, state)
+      return
+    }
+
+    sendJson(response, 405, { error: "Use GET, PUT, or POST /sessions/:sessionId/editor-state." })
+  } finally {
+    store.close()
+  }
 }
 
 function parseRangeHeader(rangeHeader: string | undefined, size: number) {
@@ -299,6 +368,102 @@ export function capiRuntimeMiddleware(root: string) {
       return
     }
 
+    const openSessionMatch = requestUrl.pathname.match(/^\/sessions\/([^/]+)\/open$/)
+    if (openSessionMatch) {
+      if (request.method !== "POST") {
+        sendJson(response, 405, { error: "Use POST /sessions/:sessionId/open." })
+        return
+      }
+
+      const store = await sessionStore()
+      if (!store) {
+        sendJson(response, 500, { error: "No Capi session store is available." })
+        return
+      }
+
+      try {
+        const sessionId = decodeURIComponent(openSessionMatch[1])
+        const session = store.sessionById(sessionId)
+        if (!session) {
+          sendJson(response, 404, { error: "Session not found." })
+          return
+        }
+
+        await mkdir(session.sourceDir, { recursive: true })
+        activeSession = session
+        store.markSessionOpened(session.id)
+        sendJson(response, 200, { session: store.sessionById(session.id) ?? session, url: sessionViewUrl(session.id) })
+      } finally {
+        store.close()
+      }
+      return
+    }
+
+    const sessionEditorStateMatch = requestUrl.pathname.match(/^\/sessions\/([^/]+)\/editor-state$/)
+    if (sessionEditorStateMatch) {
+      await handleEditorStateRequest(request, response, decodeURIComponent(sessionEditorStateMatch[1]))
+      return
+    }
+
+    const deleteSessionMatch = requestUrl.pathname.match(/^\/sessions\/([^/]+)$/)
+    if (deleteSessionMatch) {
+      if (request.method !== "DELETE") {
+        sendJson(response, 405, { error: "Use DELETE /sessions/:sessionId." })
+        return
+      }
+
+      const store = await sessionStore()
+      if (!store) {
+        sendJson(response, 500, { error: "No Capi session store is available." })
+        return
+      }
+
+      try {
+        const sessionId = decodeURIComponent(deleteSessionMatch[1])
+        const session = store.sessionById(sessionId)
+        if (!session) {
+          sendJson(response, 404, { error: "Session not found." })
+          return
+        }
+
+        if (activeSession?.id === session.id && activeCapture) {
+          sendJson(response, 409, { error: "Stop the active capture before deleting this session." })
+          return
+        }
+
+        store.deleteSession(session.id)
+        sourceRegistries.delete(session.id)
+        if (activeSession?.id === session.id) {
+          activeSession = null
+        }
+        await rm(session.sessionDir, { recursive: true, force: true })
+        sendJson(response, 200, { sessionId: session.id })
+      } finally {
+        store.close()
+      }
+      return
+    }
+
+    const sessionImageMatch = requestUrl.pathname.match(/^\/sessions\/([^/]+)\/image$/)
+    if (sessionImageMatch) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        sendJson(response, 405, { error: "Use GET or HEAD /sessions/:sessionId/image." })
+        return
+      }
+
+      const sessionId = decodeURIComponent(sessionImageMatch[1])
+      response.statusCode = 200
+      response.setHeader("Content-Type", "image/svg+xml")
+      response.setHeader("Cache-Control", "public, max-age=31536000, immutable")
+      if (request.method === "HEAD") {
+        response.end()
+        return
+      }
+
+      response.end(sessionImageSvg(sessionId))
+      return
+    }
+
     if (requestUrl.pathname === "/session") {
       if (request.method !== "GET") {
         sendJson(response, 405, { error: "Use GET /session." })
@@ -320,43 +485,12 @@ export function capiRuntimeMiddleware(root: string) {
     }
 
     if (requestUrl.pathname === "/session/editor-state") {
-      const store = await sessionStore()
-      if (!store || !activeSession) {
+      if (!activeSession) {
         sendJson(response, 404, { error: "No active session." })
         return
       }
 
-      try {
-        if (request.method === "GET") {
-          sendJson(response, 200, store.readEditorState(activeSession.id))
-          return
-        }
-
-        if (request.method === "PUT") {
-          const body = await readJsonBody(request).catch(() => undefined)
-          if (body === undefined) {
-            sendJson(response, 400, { error: "Session editor state must be valid JSON." })
-            return
-          }
-
-          const state = body && typeof body === "object" && "state" in body
-            ? (body as { state?: unknown }).state
-            : body
-
-          if (!isSessionEditorState(state)) {
-            sendJson(response, 400, { error: "Session editor state is required." })
-            return
-          }
-
-          store.writeEditorState(activeSession.id, state)
-          sendJson(response, 200, state)
-          return
-        }
-
-        sendJson(response, 405, { error: "Use GET or PUT /session/editor-state." })
-      } finally {
-        store.close()
-      }
+      await handleEditorStateRequest(request, response, activeSession.id)
       return
     }
 

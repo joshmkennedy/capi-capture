@@ -13,6 +13,7 @@ export type Clip = {
   sourceStart: number
   sourceEnd: number
   timelineStart: number
+  timelineDuration: number
   color: string
 }
 
@@ -42,6 +43,10 @@ export type CurrentSessionResponse = {
 export type CreateSessionResponse = {
   session: SessionSummary
   url: string
+}
+
+export type DeleteSessionResponse = {
+  sessionId: string
 }
 
 export type CaptureSettings = {

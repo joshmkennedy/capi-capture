@@ -2,6 +2,7 @@ import { getMockSources } from "@/sources/mockSourceProvider"
 import type { Source } from "@/sources/sourceModel"
 import type {
   CreateSessionResponse,
+  DeleteSessionResponse,
   ExportPayload,
   ExportResult,
   SessionEditorState,
@@ -17,6 +18,14 @@ export const mockCapiClient: CapiClient = {
   },
 
   async createSession(): Promise<CreateSessionResponse> {
+    throw new Error("Sessions are only available in a Capi runtime.")
+  },
+
+  async openSession(): Promise<CreateSessionResponse> {
+    throw new Error("Sessions are only available in a Capi runtime.")
+  },
+
+  async deleteSession(): Promise<DeleteSessionResponse> {
     throw new Error("Sessions are only available in a Capi runtime.")
   },
 

@@ -58,8 +58,8 @@ const capiRoot = path.join(os.tmpdir(), "capi")
 const sessionsRoot = path.join(capiRoot, "sessions")
 const runtimeDatabasePath = path.join(capiRoot, "capi.sqlite")
 const runtimeLockFile = path.join(capiRoot, "runtime.lock")
-const sessionViewParam = "sessionId"
-const gridViewUrl = `${runtimeUrl}?view=grid`
+const appBasePath = "/app"
+const gridViewUrl = new URL(`${appBasePath}/sessions`, runtimeUrl).toString()
 
 function npmCommand() {
   return process.platform === "win32" ? "npm.cmd" : "npm"
@@ -120,8 +120,7 @@ async function readRuntimeLock() {
 }
 
 function viewUrlForSession(sessionId: string, baseUrl = runtimeUrl) {
-  const url = new URL(baseUrl)
-  url.searchParams.set(sessionViewParam, sessionId)
+  const url = new URL(`${appBasePath}/sessions/${encodeURIComponent(sessionId)}`, baseUrl)
   return url.toString()
 }
 
@@ -444,19 +443,18 @@ async function createSessionInRunningRuntime(lock: Partial<RuntimeLock>) {
 
 async function delegateToRunningRuntime(lock: Partial<RuntimeLock>, options: StartSessionOptions) {
   if (options.grid) {
-    const url = new URL(lock.url ?? runtimeUrl)
-    url.searchParams.set("view", "grid")
+    const url = new URL("/app/sessions", lock.url ?? runtimeUrl).toString()
     if (process.env.CAPI_NO_OPEN === "1") {
-      console.log(`Editor available at ${url.toString()}`)
+      console.log(`Editor available at ${url}`)
     } else {
-      console.log(`Opening ${url.toString()}`)
-      openBrowser(url.toString())
+      console.log(`Opening ${url}`)
+      openBrowser(url)
     }
     return
   }
 
   const result = await createSessionInRunningRuntime(lock)
-  const url = result.url ?? viewUrlForSession(result.session.id, lock.url ?? runtimeUrl)
+  const url = new URL(result.url ?? viewUrlForSession(result.session.id, lock.url ?? runtimeUrl), lock.url ?? runtimeUrl).toString()
   console.log(`Capi session ${result.session.id}`)
   console.log(`Session directory ${result.session.sessionDir}`)
   console.log(`Source directory ${result.session.sourceDir}`)

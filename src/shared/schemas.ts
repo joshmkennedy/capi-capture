@@ -54,8 +54,10 @@ export function isSessionEditorState(value: unknown): value is SessionEditorStat
     Number.isFinite(clip.sourceStart) &&
     Number.isFinite(clip.sourceEnd) &&
     Number.isFinite(clip.timelineStart) &&
+    Number.isFinite(clip.timelineDuration) &&
     clip.sourceStart >= 0 &&
     clip.sourceEnd >= clip.sourceStart &&
+    clip.timelineDuration >= 0 &&
     typeof clip.color === "string"
   ))
 }

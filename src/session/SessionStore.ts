@@ -57,7 +57,7 @@ export class SessionStore {
     const rows = this.database.prepare(`
       SELECT id, session_dir, source_dir, created_at, updated_at, last_opened_at
       FROM sessions
-      ORDER BY last_opened_at DESC, created_at DESC
+      ORDER BY created_at DESC, id DESC
     `).all() as SessionRow[]
 
     return rows.map((row) => ({
@@ -101,10 +101,24 @@ export class SessionStore {
   }
 
   deleteSession(sessionId: string) {
-    this.database.prepare(`
-      DELETE FROM sessions
-      WHERE id = ?
-    `).run(sessionId)
+    this.database.exec("BEGIN")
+    try {
+      this.database.prepare(`
+        DELETE FROM sessions
+        WHERE id = ?
+      `).run(sessionId)
+
+      this.database.prepare(`
+        DELETE FROM global_state
+        WHERE key = 'last_session_id'
+          AND value = ?
+      `).run(sessionId)
+
+      this.database.exec("COMMIT")
+    } catch (error) {
+      this.database.exec("ROLLBACK")
+      throw error
+    }
   }
 
   lastSessionId() {

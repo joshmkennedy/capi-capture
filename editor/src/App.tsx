@@ -4,21 +4,36 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  Calendar,
+  Clock,
   Download,
   EllipsisVertical,
+  FolderOpen,
   GripVertical,
   Loader2,
   Pause,
   Play,
+  Plus,
   Scissors,
   SkipBack,
   SkipForward,
   Square,
+  Trash2,
   Video,
   Volume2,
   VolumeX,
 } from "lucide-react"
 import { capiClient, capiClientMode } from "@/api/capiClient"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
@@ -28,6 +43,7 @@ import type { Source } from "@/sources/sourceModel"
 import type { Clip } from "@/timeline/clipModel"
 import type { CaptureDisplay, CaptureSettings } from "../../src/shared/types"
 import { clipLength, timelineEnd } from "@/timeline/clipModel"
+import type { SessionSummary } from "../../src/shared/types"
 import {
   applyClipDuration,
   clamp,
@@ -62,6 +78,10 @@ type CaptureOptionsState =
   | { status: "loading"; displays: CaptureDisplay[] }
   | { status: "ready"; displays: CaptureDisplay[] }
   | { status: "error"; displays: CaptureDisplay[]; message: string }
+
+type AppRoute =
+  | { view: "grid" }
+  | { view: "editor"; sessionId: string | null }
 
 const PIXELS_PER_SECOND = 44
 const CLIP_COLORS = ["#d99f3d", "#4f9a9a", "#c46f5e", "#7a83c8"]
@@ -98,7 +118,63 @@ function clipsForSources(sources: Source[]) {
   )
 }
 
+function parseAppRoute(): AppRoute {
+  const { pathname, searchParams } = new URL(window.location.href)
+  const sessionMatch = pathname.match(/^\/app\/sessions\/([^/]+)$/)
+
+  if (pathname === "/app/sessions" || searchParams.get("view") === "grid") {
+    return { view: "grid" }
+  }
+
+  if (sessionMatch) {
+    return { view: "editor", sessionId: decodeURIComponent(sessionMatch[1]) }
+  }
+
+  const querySessionId = searchParams.get("sessionId")
+  return { view: "editor", sessionId: querySessionId }
+}
+
+function sessionUrl(sessionId: string) {
+  return `/app/sessions/${encodeURIComponent(sessionId)}`
+}
+
 function App() {
+  const [route, setRoute] = useState<AppRoute>(() => parseAppRoute())
+
+  const navigate = useCallback((url: string) => {
+    window.history.pushState(null, "", url)
+    setRoute(parseAppRoute())
+  }, [])
+
+  useEffect(() => {
+    const handlePopState = () => setRoute(parseAppRoute())
+    window.addEventListener("popstate", handlePopState)
+    return () => window.removeEventListener("popstate", handlePopState)
+  }, [])
+
+  if (route.view === "grid") {
+    return <SessionGrid onOpenSession={(sessionId) => navigate(sessionUrl(sessionId))} />
+  }
+
+  return (
+    <EditorView
+      key={route.sessionId ?? "standalone"}
+      sessionId={route.sessionId}
+      onOpenSessions={() => navigate("/app/sessions")}
+      onSessionDeleted={() => navigate("/app/sessions")}
+    />
+  )
+}
+
+function EditorView({
+  sessionId,
+  onOpenSessions,
+  onSessionDeleted,
+}: {
+  sessionId: string | null
+  onOpenSessions: () => void
+  onSessionDeleted: () => void
+}) {
   const [sources, setSources] = useState<Source[]>([])
   const [clips, setClips] = useState<Clip[]>([])
   const [activeClipId, setActiveClipId] = useState<string | null>(null)
@@ -118,7 +194,12 @@ function App() {
   const [isCaptureDialogOpen, setIsCaptureDialogOpen] = useState(false)
   const [isPreviewMuted, setIsPreviewMuted] = useState(true)
   const [exportState, setExportState] = useState<ExportState>({ status: "idle" })
+  const [deleteState, setDeleteState] = useState<"idle" | "deleting">("idle")
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null)
+  const clipsRef = useRef<Clip[]>([])
+  const saveEditorStateRef = useRef<number | null>(null)
+  const hasLoadedEditorStateRef = useRef(false)
 
   const sourcesById = useMemo(
     () => new Map(sources.map((source) => [source.id, source])),
@@ -145,18 +226,81 @@ function App() {
   )
   const timelineWidth = totalSeconds * PIXELS_PER_SECOND
 
+  const persistClips = useCallback((nextClips: Clip[]) => {
+    clipsRef.current = nextClips
+    if (capiClientMode !== "runtime" || !hasLoadedEditorStateRef.current) {
+      return
+    }
+
+    if (saveEditorStateRef.current !== null) {
+      window.clearTimeout(saveEditorStateRef.current)
+    }
+
+    saveEditorStateRef.current = window.setTimeout(() => {
+      saveEditorStateRef.current = null
+      void capiClient.saveSessionEditorState({ clips: sortClips(clipsRef.current) }, sessionId).catch(() => {
+        // Editing can continue offline; the next successful change will retry persistence.
+      })
+    }, 100)
+  }, [sessionId])
+
+  const commitClips = useCallback((nextClips: Clip[] | ((current: Clip[]) => Clip[])) => {
+    setClips((current) => {
+      const resolvedClips = typeof nextClips === "function" ? nextClips(current) : nextClips
+      persistClips(resolvedClips)
+      return resolvedClips
+    })
+  }, [persistClips])
+
+  const flushEditorState = useCallback(() => {
+    if (capiClientMode !== "runtime" || !hasLoadedEditorStateRef.current) {
+      return
+    }
+
+    if (saveEditorStateRef.current !== null) {
+      window.clearTimeout(saveEditorStateRef.current)
+      saveEditorStateRef.current = null
+    }
+
+    const clipsToSave = sortClips(clipsRef.current)
+    if (navigator.sendBeacon) {
+      const body = JSON.stringify({ state: { clips: clipsToSave } })
+      const url = sessionId
+        ? `/sessions/${encodeURIComponent(sessionId)}/editor-state`
+        : "/session/editor-state"
+      if (navigator.sendBeacon(url, new Blob([body], { type: "application/json" }))) {
+        return
+      }
+    }
+
+    void capiClient.saveSessionEditorState({ clips: clipsToSave }, sessionId).catch(() => undefined)
+  }, [sessionId])
+
   useEffect(() => {
     let isCurrent = true
+    hasLoadedEditorStateRef.current = false
 
     async function loadSources() {
       try {
+        if (capiClientMode === "runtime" && sessionId) {
+          await capiClient.openSession(sessionId)
+        }
+
         const loadedSources = await capiClient.listSources()
         if (!isCurrent) return
 
-        const loadedClips = clipsForSources(loadedSources)
+        const editorState =
+          capiClientMode === "runtime" ? await capiClient.getSessionEditorState(sessionId) : null
+        if (!isCurrent) return
+
+        const sourceIds = new Set(loadedSources.map((source) => source.id))
+        const restoredClips = editorState?.clips.filter((clip) => sourceIds.has(clip.sourceId)) ?? []
+        const loadedClips = restoredClips.length > 0 ? restoredClips : clipsForSources(loadedSources)
+        clipsRef.current = loadedClips
         setSources(loadedSources)
         setClips(loadedClips)
         setActiveClipId(loadedClips[0]?.id ?? null)
+        hasLoadedEditorStateRef.current = true
         setLoadState({ status: "ready" })
       } catch (error) {
         if (!isCurrent) return
@@ -173,7 +317,24 @@ function App() {
     return () => {
       isCurrent = false
     }
-  }, [])
+  }, [sessionId])
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        flushEditorState()
+      }
+    }
+
+    window.addEventListener("pagehide", flushEditorState)
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+
+    return () => {
+      flushEditorState()
+      window.removeEventListener("pagehide", flushEditorState)
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+    }
+  }, [flushEditorState])
 
   useEffect(() => {
     let isCurrent = true
@@ -209,8 +370,8 @@ function App() {
         current.map((source) => (source.id === clip.sourceId ? { ...source, duration } : source)),
       )
     }
-    setClips((current) => applyClipDuration(sortClips(current), clipId, duration))
-  }, [clips])
+    commitClips((current) => applyClipDuration(sortClips(current), clipId, duration))
+  }, [clips, commitClips])
 
   const {
     displayedPreviewSlot,
@@ -261,7 +422,7 @@ function App() {
 
     const deltaSeconds = (event.clientX - drag.startX) / PIXELS_PER_SECOND
 
-    setClips(() => {
+    commitClips(() => {
       if (drag.mode === "move") {
         return panClipSourceWindow(drag.initialClips, drag.clipId, -deltaSeconds, sourceDurationForClip)
       }
@@ -313,11 +474,11 @@ function App() {
     const [clip] = nextOrder.splice(index, 1)
     nextOrder.splice(targetIndex, 0, clip)
 
-    setClips(sequenceClips(nextOrder))
+    commitClips(sequenceClips(nextOrder))
   }
 
   function nudgeClip(clipId: string, amount: number) {
-    setClips((current) => panClipSourceWindow(sortClips(current), clipId, amount, sourceDurationForClip))
+    commitClips((current) => panClipSourceWindow(sortClips(current), clipId, amount, sourceDurationForClip))
   }
 
   function jumpPreviewToTrim(edge: "start" | "end") {
@@ -334,7 +495,7 @@ function App() {
       const withoutDuplicate = current.filter((item) => item.id !== source.id)
       return [...withoutDuplicate, source]
     })
-    setClips((current) => {
+    commitClips((current) => {
       const nextClip = clipForSource(source, current.length)
       setActiveClipId(nextClip.id)
       return sequenceClips([...current, nextClip])
@@ -451,6 +612,25 @@ function App() {
     })
   }
 
+  async function deleteCurrentSession() {
+    if (!sessionId) {
+      return
+    }
+
+    setDeleteState("deleting")
+    try {
+      await capiClient.deleteSession(sessionId)
+      onSessionDeleted()
+    } catch (error) {
+      setDeleteState("idle")
+      setIsDeleteDialogOpen(false)
+      setLoadState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Could not delete session.",
+      })
+    }
+  }
+
   return (
     <main className="min-h-screen bg-background text-foreground">
       <div className="flex min-h-screen flex-col">
@@ -462,11 +642,33 @@ function App() {
             <div>
               <h1 className="text-base font-semibold tracking-normal">Capi Editor</h1>
               <p className="text-xs text-muted-foreground">
-                {capiClientMode === "runtime" ? "Capi session" : "Standalone editor, mock sources"}
+                {capiClientMode === "runtime" && sessionId
+                  ? `Session ${sessionId.slice(0, 8)}`
+                  : capiClientMode === "runtime"
+                    ? "Capi session"
+                    : "Standalone editor, mock sources"}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              disabled={capiClientMode !== "runtime"}
+              onClick={onOpenSessions}
+              title="Open sessions"
+            >
+              <FolderOpen />
+              Sessions
+            </Button>
+            <Button
+              variant="outline"
+              disabled={capiClientMode !== "runtime" || !sessionId || deleteState === "deleting"}
+              onClick={() => setIsDeleteDialogOpen(true)}
+              title="Delete session"
+            >
+              {deleteState === "deleting" ? <Loader2 className="animate-spin" /> : <Trash2 />}
+              Delete
+            </Button>
             <div className="hidden min-w-0 max-w-96 text-right text-xs text-muted-foreground md:block">
               {exportState.status === "done" || exportState.status === "error" ? (
                 <span
@@ -903,8 +1105,300 @@ function App() {
           onSubmit={handleCaptureSettingsSubmit}
         />
       ) : null}
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete session?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete session {sessionId?.slice(0, 8)} and all recorded videos.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteState === "deleting"}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              disabled={deleteState === "deleting"}
+              onClick={(event) => {
+                event.preventDefault()
+                void deleteCurrentSession()
+              }}
+            >
+              {deleteState === "deleting" ? <Loader2 className="animate-spin" /> : <Trash2 />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </main>
   )
+}
+
+function SessionGrid({ onOpenSession }: { onOpenSession: (sessionId: string) => void }) {
+  const [sessionsResponse, setSessionsResponse] = useState<{
+    sessions: SessionSummary[]
+    activeSessionId: string | null
+    lastSessionId: string | null
+  } | null>(null)
+  const [loadState, setLoadState] = useState<LoadState>({ status: "loading" })
+  const [busySessionId, setBusySessionId] = useState<string | null>(null)
+  const [pendingDeleteSession, setPendingDeleteSession] = useState<SessionSummary | null>(null)
+
+  const loadSessions = useCallback(async () => {
+    setLoadState({ status: "loading" })
+    try {
+      const response = await capiClient.listSessions()
+      setSessionsResponse(response)
+      setLoadState({ status: "ready" })
+    } catch (error) {
+      setLoadState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Could not load sessions.",
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadSessions()
+  }, [loadSessions])
+
+  async function createSession() {
+    setBusySessionId("new")
+    try {
+      const response = await capiClient.createSession()
+      onOpenSession(response.session.id)
+    } catch (error) {
+      setLoadState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Could not create session.",
+      })
+    } finally {
+      setBusySessionId(null)
+    }
+  }
+
+  async function openSession(sessionId: string) {
+    setBusySessionId(sessionId)
+    try {
+      const response = await capiClient.openSession(sessionId)
+      onOpenSession(response.session.id)
+    } catch (error) {
+      setLoadState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Could not open session.",
+      })
+      setBusySessionId(null)
+    }
+  }
+
+  async function deleteSession() {
+    if (!pendingDeleteSession) {
+      return
+    }
+
+    setBusySessionId(pendingDeleteSession.id)
+    try {
+      await capiClient.deleteSession(pendingDeleteSession.id)
+      setPendingDeleteSession(null)
+      await loadSessions()
+    } catch (error) {
+      setLoadState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Could not delete session.",
+      })
+    } finally {
+      setBusySessionId(null)
+    }
+  }
+
+  const sessions = sessionsResponse?.sessions ?? []
+
+  return (
+    <main className="min-h-screen bg-background text-foreground">
+      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-5 py-5">
+        <header className="flex shrink-0 flex-wrap items-center justify-between gap-4 border-b border-border pb-5">
+          <div className="flex items-center gap-3">
+            <div className="flex size-9 items-center justify-center rounded-md bg-primary text-sm font-black text-primary-foreground">
+              C
+            </div>
+            <div>
+              <h1 className="text-base font-semibold tracking-normal">Capi Sessions</h1>
+              <p className="text-xs text-muted-foreground">
+                {sessions.length} saved {sessions.length === 1 ? "session" : "sessions"}
+              </p>
+            </div>
+          </div>
+          <Button
+            disabled={capiClientMode !== "runtime" || busySessionId !== null}
+            onClick={createSession}
+            title={capiClientMode === "runtime" ? "Create session" : "Sessions are available in a Capi runtime"}
+          >
+            {busySessionId === "new" ? <Loader2 className="animate-spin" /> : <Plus />}
+            New Session
+          </Button>
+        </header>
+
+        {loadState.status === "error" ? (
+          <div className="mt-5 rounded-md border border-destructive/50 bg-card p-3 text-sm text-destructive">
+            {loadState.message}
+          </div>
+        ) : null}
+
+        {loadState.status === "loading" ? (
+          <div className="grid flex-1 place-items-center text-sm text-muted-foreground">
+            Loading sessions...
+          </div>
+        ) : null}
+
+        {loadState.status === "ready" && sessions.length === 0 ? (
+          <div className="grid flex-1 place-items-center">
+            <div className="max-w-sm text-center">
+              <div className="text-sm font-medium">No sessions yet.</div>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Create a session to start recording sources.
+              </p>
+            </div>
+          </div>
+        ) : null}
+
+        {loadState.status === "ready" && sessions.length > 0 ? (
+          <section className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4 py-5">
+            {sessions.map((session) => {
+              const isActive = session.id === sessionsResponse?.activeSessionId
+              const isLast = session.id === sessionsResponse?.lastSessionId
+              const isBusy = busySessionId === session.id
+
+              return (
+                <Card
+                  key={session.id}
+                  className={cn(
+                    "overflow-hidden",
+                    isActive ? "border-primary ring-1 ring-primary/60" : null,
+                  )}
+                >
+                  <div className="relative aspect-video overflow-hidden bg-muted">
+                    <img
+                      src={`/sessions/${encodeURIComponent(session.id)}/image`}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
+                    <div className="absolute left-3 top-3 flex gap-2">
+                      {isActive ? <SessionBadge>Active</SessionBadge> : null}
+                      {isLast ? <SessionBadge>Last</SessionBadge> : null}
+                    </div>
+                  </div>
+                  <CardHeader>
+                    <CardTitle className="flex items-center justify-between gap-3">
+                      <span className="truncate">Session {session.id.slice(0, 8)}</span>
+                      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                        {session.id.slice(-6)}
+                      </span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid gap-2 text-xs text-muted-foreground">
+                      <SessionMeta icon={<Calendar className="size-3.5" />} label="Created" value={formatDate(session.createdAt)} />
+                      <SessionMeta icon={<Clock className="size-3.5" />} label="Opened" value={formatDate(session.lastOpenedAt)} />
+                    </div>
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                      <Button
+                        className="w-full"
+                        disabled={isBusy}
+                        onClick={() => void openSession(session.id)}
+                        title="Open session"
+                      >
+                        {isBusy ? <Loader2 className="animate-spin" /> : <FolderOpen />}
+                        Open
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        disabled={isBusy}
+                        onClick={() => setPendingDeleteSession(session)}
+                        title="Delete session"
+                      >
+                        <Trash2 />
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )
+            })}
+          </section>
+        ) : null}
+      </div>
+      <AlertDialog
+        open={pendingDeleteSession !== null}
+        onOpenChange={(open) => {
+          if (!open && busySessionId === null) {
+            setPendingDeleteSession(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete session?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete session {pendingDeleteSession?.id.slice(0, 8)} and all recorded videos.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busySessionId !== null}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              disabled={busySessionId !== null}
+              onClick={(event) => {
+                event.preventDefault()
+                void deleteSession()
+              }}
+            >
+              {busySessionId !== null ? <Loader2 className="animate-spin" /> : <Trash2 />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </main>
+  )
+}
+
+function SessionBadge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-md border border-primary/50 bg-background/85 px-2 py-1 text-[11px] font-semibold text-primary shadow-sm backdrop-blur">
+      {children}
+    </span>
+  )
+}
+
+function SessionMeta({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode
+  label: string
+  value: string
+}) {
+  return (
+    <div className="grid grid-cols-[auto_64px_minmax(0,1fr)] items-center gap-2">
+      <span className="text-muted-foreground">{icon}</span>
+      <span>{label}</span>
+      <span className="min-w-0 truncate text-right text-foreground">{value}</span>
+    </div>
+  )
+}
+
+function formatDate(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date)
 }
 
 function PanningSourceOverlay({
