@@ -1,4 +1,4 @@
-import type { ExportPayload } from "./types"
+import type { CaptureSettings, ExportPayload } from "./types"
 
 export const MIN_EXPORT_SECONDS = 0.05
 
@@ -23,3 +23,18 @@ export function isExportPayload(value: unknown): value is ExportPayload {
   })
 }
 
+export function isCaptureSettings(value: unknown): value is CaptureSettings {
+  if (!value || typeof value !== "object") {
+    return false
+  }
+
+  const settings = value as CaptureSettings
+
+  return (
+    settings.target === "display" &&
+    Number.isInteger(settings.displayId) &&
+    settings.displayId > 0 &&
+    typeof settings.microphone === "boolean" &&
+    typeof settings.showClicks === "boolean"
+  )
+}

@@ -7,6 +7,22 @@ export type Source = {
   duration: number
 }
 
+export type CaptureSettings = {
+  target: "display"
+  displayId: number
+  microphone: boolean
+  showClicks: boolean
+}
+
+export type CaptureDisplay = {
+  id: number
+  name: string
+}
+
+export type CaptureOptions = {
+  displays: CaptureDisplay[]
+}
+
 export type ExportClip = {
   file: string
   sourcePath?: string

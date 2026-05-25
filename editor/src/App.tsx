@@ -5,6 +5,7 @@ import {
   ArrowRight,
   ArrowUp,
   Download,
+  EllipsisVertical,
   GripVertical,
   Loader2,
   Pause,
@@ -12,7 +13,10 @@ import {
   Scissors,
   SkipBack,
   SkipForward,
+  Square,
   Video,
+  Volume2,
+  VolumeX,
 } from "lucide-react"
 import { capiClient, capiClientMode } from "@/api/capiClient"
 import { Button } from "@/components/ui/button"
@@ -22,11 +26,11 @@ import { createExportPayload } from "@/export/exportClient"
 import { useTimelinePreview } from "@/preview/useTimelinePreview"
 import type { Source } from "@/sources/sourceModel"
 import type { Clip } from "@/timeline/clipModel"
+import type { CaptureDisplay, CaptureSettings } from "../../src/shared/types"
 import { clipLength, timelineEnd } from "@/timeline/clipModel"
 import {
   applyClipDuration,
   clamp,
-  findNextClip,
   MIN_CLIP_SECONDS,
   moveClipBoundary,
   seconds,
@@ -53,8 +57,20 @@ type CaptureState =
   | { status: "capturing" }
   | { status: "error"; message: string }
 
+type CaptureOptionsState =
+  | { status: "idle"; displays: CaptureDisplay[] }
+  | { status: "loading"; displays: CaptureDisplay[] }
+  | { status: "ready"; displays: CaptureDisplay[] }
+  | { status: "error"; displays: CaptureDisplay[]; message: string }
+
 const PIXELS_PER_SECOND = 44
 const CLIP_COLORS = ["#d99f3d", "#4f9a9a", "#c46f5e", "#7a83c8"]
+const DEFAULT_CAPTURE_SETTINGS: CaptureSettings = {
+  target: "display",
+  displayId: 1,
+  microphone: true,
+  showClicks: true,
+}
 
 function clipForSource(source: Source, index: number): Clip {
   const sourceStart = index === 0 ? 0.8 : index === 2 ? 0 : 1.2
@@ -82,6 +98,17 @@ function App() {
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false)
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" })
   const [captureState, setCaptureState] = useState<CaptureState>({ status: "idle" })
+  const [captureSettings, setCaptureSettings] = useState<CaptureSettings | null>(null)
+  const [draftCaptureSettings, setDraftCaptureSettings] = useState<CaptureSettings>(
+    DEFAULT_CAPTURE_SETTINGS,
+  )
+  const [captureOptionsState, setCaptureOptionsState] = useState<CaptureOptionsState>({
+    status: "idle",
+    displays: [],
+  })
+  const [captureDialogMode, setCaptureDialogMode] = useState<"record" | "settings">("settings")
+  const [isCaptureDialogOpen, setIsCaptureDialogOpen] = useState(false)
+  const [isPreviewMuted, setIsPreviewMuted] = useState(true)
   const [exportState, setExportState] = useState<ExportState>({ status: "idle" })
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null)
 
@@ -132,6 +159,33 @@ function App() {
     }
 
     void loadSources()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function loadCaptureSettings() {
+      try {
+        const settings = await capiClient.getCaptureSettings()
+        if (!isCurrent || !settings) return
+
+        setCaptureSettings(settings)
+        setDraftCaptureSettings(settings)
+      } catch (error) {
+        if (!isCurrent) return
+
+        setCaptureState({
+          status: "error",
+          message: error instanceof Error ? error.message : "Could not load capture settings.",
+        })
+      }
+    }
+
+    void loadCaptureSettings()
 
     return () => {
       isCurrent = false
@@ -261,10 +315,10 @@ function App() {
     setPreviewTime(edge === "start" ? activeClip.timelineStart : timelineEnd(activeClip))
   }
 
-  async function performCapture() {
+  async function performCapture(settings: CaptureSettings) {
     setCaptureState({ status: "capturing" })
 
-    const source = await capiClient.startCapture()
+    const source = await capiClient.startCapture(settings)
 
     setSources((current) => {
       const withoutDuplicate = current.filter((item) => item.id !== source.id)
@@ -278,13 +332,93 @@ function App() {
     setCaptureState({ status: "idle" })
   }
 
+  async function stopCapture() {
+    await capiClient.stopCapture()
+  }
+
   function handleCapture() {
-    void performCapture().catch((error) => {
+    if (captureState.status === "capturing") {
+      void stopCapture().catch((error) => {
+        setCaptureState({
+          status: "error",
+          message: error instanceof Error ? error.message : "Could not stop capture.",
+        })
+      })
+      return
+    }
+
+    if (!captureSettings) {
+      setDraftCaptureSettings(DEFAULT_CAPTURE_SETTINGS)
+      setCaptureDialogMode("record")
+      setIsCaptureDialogOpen(true)
+      void loadCaptureOptions(DEFAULT_CAPTURE_SETTINGS)
+      return
+    }
+
+    void performCapture(captureSettings).catch((error) => {
       setCaptureState({
         status: "error",
         message: error instanceof Error ? error.message : "Capture failed.",
       })
     })
+  }
+
+  function openCaptureSettings() {
+    setDraftCaptureSettings(captureSettings ?? DEFAULT_CAPTURE_SETTINGS)
+    setCaptureDialogMode("settings")
+    setIsCaptureDialogOpen(true)
+    void loadCaptureOptions(captureSettings ?? DEFAULT_CAPTURE_SETTINGS)
+  }
+
+  async function loadCaptureOptions(settings: CaptureSettings) {
+    setCaptureOptionsState((current) => ({ status: "loading", displays: current.displays }))
+
+    try {
+      const options = await capiClient.listCaptureOptions()
+      const displays = options.displays.length > 0 ? options.displays : [{ id: 1, name: "Display 1" }]
+      const selectedDisplay = displays.some((display) => display.id === settings.displayId)
+        ? settings.displayId
+        : displays[0].id
+
+      setDraftCaptureSettings((current) => ({
+        ...current,
+        target: "display",
+        displayId: selectedDisplay,
+      }))
+      setCaptureOptionsState({ status: "ready", displays })
+    } catch (error) {
+      setCaptureOptionsState({
+        status: "error",
+        displays: [{ id: settings.displayId, name: `Display ${settings.displayId}` }],
+        message: error instanceof Error ? error.message : "Could not load capture options.",
+      })
+    }
+  }
+
+  async function persistDraftCaptureSettings() {
+    const savedSettings = await capiClient.saveCaptureSettings(draftCaptureSettings)
+    setCaptureSettings(savedSettings)
+    setDraftCaptureSettings(savedSettings)
+    setIsCaptureDialogOpen(false)
+    return savedSettings
+  }
+
+  function handleCaptureSettingsSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void persistDraftCaptureSettings()
+      .then((settings) => {
+        if (captureDialogMode === "record") {
+          return performCapture(settings)
+        }
+
+        return undefined
+      })
+      .catch((error) => {
+        setCaptureState({
+          status: "error",
+          message: error instanceof Error ? error.message : "Could not save capture settings.",
+        })
+      })
   }
 
   async function performExport() {
@@ -354,15 +488,28 @@ function App() {
               )}
               {exportState.status === "exporting" ? "Exporting" : "Export"}
             </Button>
-            <Button
-              variant="secondary"
-              disabled={capiClientMode !== "runtime" || captureState.status === "capturing"}
-              onClick={handleCapture}
-              title={capiClientMode === "runtime" ? "Record source" : "Capture is available in a Capi session"}
-            >
-              {captureState.status === "capturing" ? <Loader2 className="animate-spin" /> : <Video />}
-              {captureState.status === "capturing" ? "Recording" : "Record"}
-            </Button>
+            <div className="inline-flex h-9 overflow-hidden rounded-md bg-secondary shadow-sm ring-1 ring-border">
+              <Button
+                variant="secondary"
+                disabled={capiClientMode !== "runtime"}
+                onClick={handleCapture}
+                title={capiClientMode === "runtime" ? "Record source" : "Capture is available in a Capi session"}
+                className="h-9 rounded-none shadow-none ring-0"
+              >
+                {captureState.status === "capturing" ? <Square /> : <Video />}
+                {captureState.status === "capturing" ? "Stop" : "Record"}
+              </Button>
+              <Button
+                variant="secondary"
+                size="icon"
+                disabled={capiClientMode !== "runtime" || captureState.status === "capturing"}
+                onClick={openCaptureSettings}
+                title="Capture settings"
+                className="h-9 w-8 rounded-none border-l border-border/80 px-0 shadow-none ring-0"
+              >
+                <EllipsisVertical />
+              </Button>
+            </div>
           </div>
         </header>
 
@@ -476,7 +623,7 @@ function App() {
                           : "pointer-events-none opacity-0",
                       )}
                       playsInline
-                      muted
+                      muted={isPreviewMuted}
                       preload="auto"
                       onLoadedMetadata={(event) => {
                         const loadedPath = loadedPreviewPathsRef.current[slot]
@@ -486,20 +633,6 @@ function App() {
                         if (loadedClip) {
                           updateClipDuration(loadedClip.id, event.currentTarget.duration)
                         }
-                      }}
-                      onEnded={(event) => {
-                        if (event.currentTarget !== previewVideoRefs.current[displayedPreviewSlot]) {
-                          return
-                        }
-
-                        const nextClip = findNextClip(orderedClips, previewTime + 0.01)
-                        if (!nextClip) {
-                          setIsPlaying(false)
-                          setPreviewTime(presentationDuration)
-                          return
-                        }
-
-                        setPreviewTime(nextClip.timelineStart)
                       }}
                     />
                   ))}
@@ -521,9 +654,17 @@ function App() {
                     </span>
                     <span className="font-mono">{seconds(presentationDuration)}</span>
                   </div>
-                  <div className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2">
+                  <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] items-center gap-2">
                     <Button variant="secondary" size="icon" onClick={togglePlayback} title={isPlaying ? "Pause" : "Play"}>
                       {isPlaying ? <Pause /> : <Play />}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => setIsPreviewMuted((muted) => !muted)}
+                      title={isPreviewMuted ? "Unmute preview" : "Mute preview"}
+                    >
+                      {isPreviewMuted ? <VolumeX /> : <Volume2 />}
                     </Button>
                     <input
                       className="h-2 min-w-0 accent-primary"
@@ -723,7 +864,108 @@ function App() {
           </section>
         </section>
       </div>
+      {isCaptureDialogOpen ? (
+        <CaptureSettingsDialog
+          mode={captureDialogMode}
+          settings={draftCaptureSettings}
+          optionsState={captureOptionsState}
+          disabled={captureState.status === "capturing"}
+          onChange={setDraftCaptureSettings}
+          onCancel={() => setIsCaptureDialogOpen(false)}
+          onSubmit={handleCaptureSettingsSubmit}
+        />
+      ) : null}
     </main>
+  )
+}
+
+function CaptureSettingsDialog({
+  mode,
+  settings,
+  optionsState,
+  disabled,
+  onChange,
+  onCancel,
+  onSubmit,
+}: {
+  mode: "record" | "settings"
+  settings: CaptureSettings
+  optionsState: CaptureOptionsState
+  disabled: boolean
+  onChange: (settings: CaptureSettings) => void
+  onCancel: () => void
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
+      <form
+        className="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-xl"
+        onSubmit={onSubmit}
+      >
+        <div className="mb-5">
+          <h2 className="text-base font-semibold">
+            {mode === "record" ? "Capture Settings" : "Update Capture Settings"}
+          </h2>
+        </div>
+
+        <div className="space-y-4">
+          <label className="grid gap-2 text-sm">
+            <span className="font-medium">Screen</span>
+            <select
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
+              value={settings.displayId}
+              disabled={disabled || optionsState.status === "loading"}
+              onChange={(event) => onChange({
+                ...settings,
+                target: "display",
+                displayId: Number(event.currentTarget.value),
+              })}
+            >
+              {optionsState.status === "loading" && optionsState.displays.length === 0 ? (
+                <option value={settings.displayId}>Loading displays...</option>
+              ) : null}
+              {optionsState.displays.map((display) => (
+                <option key={display.id} value={display.id}>
+                  {display.name}
+                </option>
+              ))}
+            </select>
+            {optionsState.status === "error" ? (
+              <span className="text-xs text-destructive">{optionsState.message}</span>
+            ) : null}
+          </label>
+
+          <label className="flex items-center justify-between gap-4 rounded-md border border-border bg-muted p-3 text-sm">
+            <span className="font-medium">Microphone</span>
+            <input
+              className="size-4 accent-primary"
+              type="checkbox"
+              checked={settings.microphone}
+              onChange={(event) => onChange({ ...settings, microphone: event.currentTarget.checked })}
+            />
+          </label>
+
+          <label className="flex items-center justify-between gap-4 rounded-md border border-border bg-muted p-3 text-sm">
+            <span className="font-medium">Show Clicks</span>
+            <input
+              className="size-4 accent-primary"
+              type="checkbox"
+              checked={settings.showClicks}
+              onChange={(event) => onChange({ ...settings, showClicks: event.currentTarget.checked })}
+            />
+          </label>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-2">
+          <Button type="button" variant="ghost" disabled={disabled} onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={disabled}>
+            {mode === "record" ? "Save and Record" : "Save"}
+          </Button>
+        </div>
+      </form>
+    </div>
   )
 }
 

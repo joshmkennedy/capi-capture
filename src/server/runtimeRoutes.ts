@@ -1,8 +1,12 @@
-import { spawn } from "node:child_process"
 import { createReadStream } from "node:fs"
 import { stat } from "node:fs/promises"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import path from "node:path"
+import { captureOptions } from "../capture/CaptureOptions"
+import { readCaptureSettings, writeCaptureSettings } from "../capture/CaptureSettingsStore"
+import { startScreenCapture, type ActiveCapture } from "../capture/ScreencaptureAdapter"
+import { isCaptureSettings } from "../shared/schemas"
+import type { CaptureSettings } from "../shared/types"
 import { capiExportMiddleware } from "./exportRoute"
 import { SourceRegistry } from "../sources/SourceRegistry"
 
@@ -14,6 +18,20 @@ function sendJson(response: ServerResponse, statusCode: number, body: unknown) {
 
 function sessionCaptureDir() {
   return process.env.CAPI_CAPTURE_DIR
+}
+
+async function readJsonBody(request: IncomingMessage) {
+  let body = ""
+
+  for await (const chunk of request) {
+    body += chunk.toString()
+  }
+
+  if (!body.trim()) {
+    return null
+  }
+
+  return JSON.parse(body) as unknown
 }
 
 async function syncSessionSources(registry: SourceRegistry) {
@@ -54,29 +72,12 @@ async function serveClip(registry: SourceRegistry, requestUrl: URL, response: Se
   createReadStream(clipPath).pipe(response)
 }
 
-function runScreencapture(outputPath: string) {
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn("screencapture", ["-i", "-U", "-Jvideo", "-v", "-g", outputPath], {
-      stdio: ["ignore", "ignore", "pipe"],
-    })
-    let stderr = ""
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString()
-    })
-    child.on("error", reject)
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve()
-        return
-      }
-
-      reject(new Error(stderr.trim() || `screencapture exited with code ${code}.`))
-    })
-  })
-}
-
-async function captureSource(registry: SourceRegistry, response: ServerResponse) {
+async function captureSource(
+  registry: SourceRegistry,
+  settings: CaptureSettings,
+  response: ServerResponse,
+  onActiveCapture: (capture: ActiveCapture) => void,
+) {
   const captureDir = sessionCaptureDir()
   if (!captureDir) {
     sendJson(response, 500, { error: "No active capture directory." })
@@ -90,13 +91,19 @@ async function captureSource(registry: SourceRegistry, response: ServerResponse)
 
   const file = `${Date.now()}.mov`
   const filePath = path.join(captureDir, file)
-  await runScreencapture(filePath)
-  sendJson(response, 200, registry.sourceForEditor(registry.registerSource(filePath)))
+  const capture = startScreenCapture(filePath, settings)
+  onActiveCapture(capture)
+
+  const result = await capture.result
+  const source = await registry.registerSourceWithMetadata(result.filePath)
+  sendJson(response, 200, registry.sourceForEditor(source))
 }
 
 export function capiRuntimeMiddleware(root: string) {
   const exportMiddleware = capiExportMiddleware(root)
   const sourceRegistry = new SourceRegistry()
+  let activeCapture: Promise<void> | null = null
+  let activeScreenCapture: ActiveCapture | null = null
 
   return async (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     if (!request.url) {
@@ -117,6 +124,57 @@ export function capiRuntimeMiddleware(root: string) {
       return
     }
 
+    if (requestUrl.pathname === "/capture-options") {
+      if (request.method !== "GET") {
+        sendJson(response, 405, { error: "Use GET /capture-options." })
+        return
+      }
+
+      try {
+        sendJson(response, 200, await captureOptions())
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Could not load capture options."
+        sendJson(response, 500, { error: message })
+      }
+      return
+    }
+
+    if (requestUrl.pathname === "/capture-settings") {
+      try {
+        if (request.method === "GET") {
+          sendJson(response, 200, { settings: await readCaptureSettings() })
+          return
+        }
+
+        if (request.method === "PUT") {
+          const body = await readJsonBody(request).catch(() => undefined)
+          if (body === undefined) {
+            sendJson(response, 400, { error: "Capture settings must be valid JSON." })
+            return
+          }
+
+          const settings = body && typeof body === "object" && "settings" in body
+            ? (body as { settings?: unknown }).settings
+            : null
+
+          if (!isCaptureSettings(settings)) {
+            sendJson(response, 400, { error: "Capture settings are required." })
+            return
+          }
+
+          await writeCaptureSettings(settings)
+          sendJson(response, 200, { settings })
+          return
+        }
+
+        sendJson(response, 405, { error: "Use GET or PUT /capture-settings." })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Could not update capture settings."
+        sendJson(response, 500, { error: message })
+      }
+      return
+    }
+
     if (requestUrl.pathname.startsWith("/clips/")) {
       if (request.method !== "GET") {
         sendJson(response, 405, { error: "Use GET /clips/:file." })
@@ -128,13 +186,50 @@ export function capiRuntimeMiddleware(root: string) {
     }
 
     if (requestUrl.pathname === "/captures") {
+      if (request.method === "DELETE") {
+        if (!activeScreenCapture) {
+          sendJson(response, 409, { error: "No capture is in progress." })
+          return
+        }
+
+        activeScreenCapture.stop()
+        sendJson(response, 200, { status: "stopping" })
+        return
+      }
+
       if (request.method !== "POST") {
-        sendJson(response, 405, { error: "Use POST /captures." })
+        sendJson(response, 405, { error: "Use POST or DELETE /captures." })
         return
       }
 
       try {
-        await captureSource(sourceRegistry, response)
+        if (activeCapture) {
+          sendJson(response, 409, { error: "A capture is already in progress." })
+          return
+        }
+
+        const body = await readJsonBody(request).catch(() => undefined)
+        if (body === undefined) {
+          sendJson(response, 400, { error: "Capture settings must be valid JSON." })
+          return
+        }
+
+        const settings = body && typeof body === "object" && "settings" in body
+          ? (body as { settings?: unknown }).settings
+          : null
+
+        if (!isCaptureSettings(settings)) {
+          sendJson(response, 400, { error: "Capture settings are required." })
+          return
+        }
+
+        activeCapture = captureSource(sourceRegistry, settings, response, (capture) => {
+          activeScreenCapture = capture
+        }).finally(() => {
+          activeCapture = null
+          activeScreenCapture = null
+        })
+        await activeCapture
       } catch (error) {
         const message = error instanceof Error ? error.message : "Capture failed."
         sendJson(response, 500, { error: message })

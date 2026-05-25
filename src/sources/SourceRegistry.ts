@@ -1,6 +1,7 @@
 import { readdir } from "node:fs/promises"
 import path from "node:path"
 import type { Source } from "../shared/types"
+import { probeMediaDuration } from "./MediaMetadata"
 
 const FALLBACK_SOURCE_DURATION = 12
 const SOURCE_URL_PREFIX = "/clips"
@@ -63,15 +64,25 @@ export class SourceRegistry {
     return source
   }
 
+  async registerSourceWithMetadata(filePath: string) {
+    const resolvedFilePath = path.resolve(filePath)
+    const existingId = this.sourceIdsByFilePath.get(resolvedFilePath)
+    if (existingId) {
+      return this.sourcesById.get(existingId) as RegisteredSource
+    }
+
+    const duration = await probeMediaDuration(filePath)
+    return this.registerSource(filePath, duration ? { duration } : {})
+  }
+
   async registerSourcesInDirectory(directory: string) {
     const files = await readdir(directory).catch(() => [])
 
-    files
+    for (const file of files
       .filter((file) => file.toLowerCase().endsWith(".mov"))
-      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
-      .forEach((file) => {
-        this.registerSource(path.join(directory, file))
-      })
+      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))) {
+      await this.registerSourceWithMetadata(path.join(directory, file))
+    }
   }
 
   listSources(): Source[] {
