@@ -1,290 +1,124 @@
+# Capi
 
-<style>
-    :root {
-      --bg: #0f1115;
-      --panel: #171a21;
-      --panel-2: #1f2430;
-      --text: #eef1f6;
-      --muted: #aab2c0;
-      --border: #2b3140;
-      --accent: #7aa2ff;
-      --code-bg: #0a0c10;
-    }
+A prototype screen recording and editing tool for creating demos, walkthroughs, and guides using native macOS screen capture plus a browser-based editor.
 
-    * {
-      box-sizing: border-box;
-    }
+## Overview
 
-    body {
-      margin: 0;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: radial-gradient(circle at top, #1a2030 0, var(--bg) 42rem);
-      color: var(--text);
-      line-height: 1.6;
-    }
+Capi combines a parent orchestration process with a Vite-powered React editor. The parent process launches native macOS screen recordings, watches for completed clips, sends clip updates to the editor, and exports the final timeline with ffmpeg.
 
-    main {
-      max-width: 960px;
-      margin: 0 auto;
-      padding: 48px 24px 80px;
-    }
+Shared product and domain terms are defined in [docs/ubiquitous-language.md](docs/ubiquitous-language.md).
 
-    header {
-      margin-bottom: 40px;
-      padding-bottom: 28px;
-      border-bottom: 1px solid var(--border);
-    }
+### Native capture
 
-    h1 {
-      margin: 0 0 12px;
-      font-size: clamp(2.5rem, 8vw, 5rem);
-      line-height: 1;
-      letter-spacing: -0.06em;
-    }
+Uses `screencapture` to provide macOS-native recording UI.
 
-    .subtitle {
-      margin: 0;
-      max-width: 720px;
-      color: var(--muted);
-      font-size: 1.1rem;
-    }
+### Browser editor
 
-    h2 {
-      margin: 48px 0 16px;
-      font-size: 1.75rem;
-      letter-spacing: -0.03em;
-    }
+Uses Vite and React to preview, trim, arrange, and export clips.
 
-    h3 {
-      margin: 28px 0 10px;
-      font-size: 1.15rem;
-    }
+### ffmpeg export
 
-    p {
-      margin: 0 0 16px;
-    }
+Trims and stitches clips into a single final video.
 
-    ul, ol {
-      margin: 0 0 20px;
-      padding-left: 1.4rem;
-    }
+## Branding
 
-    li + li {
-      margin-top: 6px;
-    }
+Capi's brand direction is documented in [brand/brand-guide.html](brand/brand-guide.html). The guide defines the product mark, color palette, typography, component styling, and brand personality for the prototype.
 
-    code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      color: #dce7ff;
-      background: rgba(122, 162, 255, 0.12);
-      padding: 0.15rem 0.35rem;
-      border-radius: 6px;
-    }
+Brand elements live in the `brand/` directory:
 
-    pre {
-      margin: 14px 0 24px;
-      padding: 18px;
-      overflow-x: auto;
-      background: var(--code-bg);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      box-shadow: 0 12px 40px rgba(0,0,0,0.18);
-    }
+- [brand/brand-guide.html](brand/brand-guide.html) - visual brand system.
+- [brand/logo.png](brand/logo.png) - app logo.
+- [brand/favicon.png](brand/favicon.png) - favicon source.
+- [brand/branding.png](brand/branding.png) - brand overview image.
+- `brand/current*.png` - current interface screenshots and visual references.
 
-    pre code {
-      padding: 0;
-      background: transparent;
-      color: #e8edf8;
-      border-radius: 0;
-    }
+## Prototype Architecture
 
-    .card {
-      margin: 20px 0;
-      padding: 22px;
-      background: linear-gradient(180deg, var(--panel), var(--panel-2));
-      border: 1px solid var(--border);
-      border-radius: 18px;
-    }
+### 1. Parent Process
 
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 16px;
-      margin: 20px 0;
-    }
+The parent process is responsible for lifecycle management of the entire session.
 
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      margin: 4px 6px 4px 0;
-      padding: 6px 10px;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      color: var(--muted);
-      background: rgba(255,255,255,0.03);
-      font-size: 0.92rem;
-    }
+```sh
+npm run capi
+```
 
-    .note {
-      border-left: 3px solid var(--accent);
-      padding: 14px 16px;
-      margin: 20px 0;
-      background: rgba(122, 162, 255, 0.09);
-      border-radius: 12px;
-      color: #dfe7ff;
-    }
+- Create a session ID.
+- Create a capture directory for the session.
+- Start the editor web server.
+- Start the WebSocket/API server.
+- Start the filesystem watcher.
+- Launch screen recording processes.
+- Cleanly shut down child processes when the session ends.
 
-    a {
-      color: var(--accent);
-    }
+```text
+/tmp/capi/<session-id>/
+```
 
-    footer {
-      margin-top: 56px;
-      padding-top: 24px;
-      border-top: 1px solid var(--border);
-      color: var(--muted);
-      font-size: 0.95rem;
-    }
+### 2. Screen Capture
 
-  <main>
-    <header>
-      <h1>Capi</h1>
-      <p class="subtitle">
-        A prototype screen recording and editing tool for creating demos, walkthroughs,
-        and guides using native macOS screen capture plus a browser-based editor.
-      </p>
-    </header>
+Screen recording uses the native macOS `screencapture` utility.
 
-    <section>
-      <h2>Overview</h2>
-      <p>
-        Capi combines a parent orchestration process with a Vite-powered React editor.
-        The parent process launches native macOS screen recordings, watches for completed
-        clips, sends clip updates to the editor, and exports the final timeline with ffmpeg.
-      </p>
+```sh
+screencapture -i -U -Jvideo -v -g /tmp/capi/<session-id>/<clip-id>.mov
+```
 
-      <p>
-        Shared product and domain terms are defined in
-        <a href="docs/ubiquitous-language.md">docs/ubiquitous-language.md</a>.
-      </p>
+This provides:
 
-      <div class="grid">
-        <div class="card">
-          <h3>Native capture</h3>
-          <p>Uses <code>screencapture</code> to provide macOS-native recording UI.</p>
-        </div>
-        <div class="card">
-          <h3>Browser editor</h3>
-          <p>Uses Vite and React to preview, trim, arrange, and export clips.</p>
-        </div>
-        <div class="card">
-          <h3>ffmpeg export</h3>
-          <p>Trims and stitches clips into a single final video.</p>
-        </div>
-      </div>
-    </section>
+- Native macOS recording UI.
+- Interactive screen, window, or selection capture.
+- Microphone audio capture.
+- One recording per invocation.
 
-    <section>
-      <h2>Branding</h2>
-      <p>
-        Capi's brand direction is documented in
-        <a href="brand/brand-guide.html">brand/brand-guide.html</a>. The guide defines
-        the product mark, color palette, typography, component styling, and brand
-        personality for the prototype.
-      </p>
-
-      <p>Brand elements live in the <code>brand/</code> directory:</p>
-      <ul>
-        <li><a href="brand/brand-guide.html">brand/brand-guide.html</a> - visual brand system.</li>
-        <li><a href="brand/logo.png">brand/logo.png</a> - app logo.</li>
-        <li><a href="brand/favicon.png">brand/favicon.png</a> - favicon source.</li>
-        <li><a href="brand/branding.png">brand/branding.png</a> - brand overview image.</li>
-        <li><code>brand/current*.png</code> - current interface screenshots and visual references.</li>
-      </ul>
-    </section>
-
-    <section>
-      <h2>Prototype Architecture</h2>
-
-      <h3>1. Parent Process</h3>
-      <p>The parent process is responsible for lifecycle management of the entire session.</p>
-      <pre><code>npm run capi</code></pre>
-      <ul>
-        <li>Create a session ID.</li>
-        <li>Create a capture directory for the session.</li>
-        <li>Start the editor web server.</li>
-        <li>Start the WebSocket/API server.</li>
-        <li>Start the filesystem watcher.</li>
-        <li>Launch screen recording processes.</li>
-        <li>Cleanly shut down child processes when the session ends.</li>
-      </ul>
-
-      <pre><code>/tmp/capi/&lt;session-id&gt;/</code></pre>
-
-      <h3>2. Screen Capture</h3>
-      <p>Screen recording uses the native macOS <code>screencapture</code> utility.</p>
-
-      <pre><code>screencapture -i -U -Jvideo -v -g /tmp/capi/&lt;session-id&gt;/&lt;clip-id&gt;.mov</code></pre>
-
-      <p>This provides:</p>
-      <ul>
-        <li>Native macOS recording UI.</li>
-        <li>Interactive screen, window, or selection capture.</li>
-        <li>Microphone audio capture.</li>
-        <li>One recording per invocation.</li>
-      </ul>
-
-      <pre><code>/tmp/capi/abc123/
+```text
+/tmp/capi/abc123/
   1.mov
   2.mov
-  3.mov</code></pre>
+  3.mov
+```
 
-      <h3>Recording Flow</h3>
-      <ol>
-        <li>User clicks Record.</li>
-        <li>Parent generates a new clip ID.</li>
-        <li>Parent launches <code>screencapture</code>.</li>
-        <li>User records.</li>
-        <li><code>screencapture</code> exits.</li>
-        <li>Clip becomes available to the editor.</li>
-      </ol>
-    </section>
+### Recording Flow
 
-    <section>
-      <h2>Editor Web App</h2>
-      <p>The editor is a Vite-based React application.</p>
+1. User clicks Record.
+2. Parent generates a new clip ID.
+3. Parent launches `screencapture`.
+4. User records.
+5. `screencapture` exits.
+6. Clip becomes available to the editor.
 
-      <ul>
-        <li>Load recorded clips into the browser.</li>
-        <li>Preview clips as normal video.</li>
-        <li>Trim clip start and end.</li>
-        <li>Place clips onto a master timeline.</li>
-        <li>Adjust clip timestamps.</li>
-        <li>Preview the composed timeline.</li>
-        <li>Trigger export or publish.</li>
-      </ul>
+## Editor Web App
 
-      <p>The editor communicates with the backend via WebSocket for real-time clip updates and HTTP for export operations.</p>
-    </section>
+The editor is a Vite-based React application.
 
-    <section>
-      <h2>Backend Server</h2>
-      <p>The backend server supports the editor and export pipeline.</p>
+- Load recorded clips into the browser.
+- Preview clips as normal video.
+- Trim clip start and end.
+- Place clips onto a master timeline.
+- Adjust clip timestamps.
+- Preview the composed timeline.
+- Trigger export or publish.
 
-      <ul>
-        <li>Serve recorded clip files.</li>
-        <li>Maintain WebSocket connections.</li>
-        <li>Notify clients when new clips are added.</li>
-        <li>Receive timeline export payloads.</li>
-        <li>Execute ffmpeg export jobs.</li>
-      </ul>
+The editor communicates with the backend via WebSocket for real-time clip updates and HTTP for export operations.
 
-      <pre><code>GET  /sessions/:sessionId/clips/:filename
+## Backend Server
+
+The backend server supports the editor and export pipeline.
+
+- Serve recorded clip files.
+- Maintain WebSocket connections.
+- Notify clients when new clips are added.
+- Receive timeline export payloads.
+- Execute ffmpeg export jobs.
+
+```text
+GET  /sessions/:sessionId/clips/:filename
 WS   /events
-POST /export</code></pre>
+POST /export
+```
 
-      <h3>Example Export Payload</h3>
-      <pre><code>{
+### Example Export Payload
+
+```json
+{
   "clips": [
     {
       "file": "1.mov",
@@ -299,82 +133,79 @@ POST /export</code></pre>
       "timelineStart": 18.7
     }
   ]
-}</code></pre>
-    </section>
+}
+```
 
-    <section>
-      <h2>Watcher</h2>
-      <p>A filesystem watcher monitors the session capture directory.</p>
+## Watcher
 
-      <pre><code>/tmp/capi/&lt;session-id&gt;/</code></pre>
+A filesystem watcher monitors the session capture directory.
 
-      <p>On new <code>.mov</code> files, the watcher should:</p>
-      <ul>
-        <li>Detect completed file writes.</li>
-        <li>Register the clip.</li>
-        <li>Notify connected editor clients.</li>
-        <li>Make the clip immediately available for editing.</li>
-      </ul>
+```text
+/tmp/capi/<session-id>/
+```
 
-      <h3>Example WebSocket Event</h3>
-      <pre><code>{
+On new `.mov` files, the watcher should:
+
+- Detect completed file writes.
+- Register the clip.
+- Notify connected editor clients.
+- Make the clip immediately available for editing.
+
+### Example WebSocket Event
+
+```json
+{
   "type": "clip-added",
   "clip": {
     "id": "2",
-    "path": "/sessions/&lt;session-id&gt;/clips/2.mov"
+    "path": "/sessions/<session-id>/clips/2.mov"
   }
-}</code></pre>
-    </section>
+}
+```
 
-    <section>
-      <h2>Export Pipeline</h2>
-      <p>When the user clicks Export or Publish:</p>
-      <ol>
-        <li>The editor sends timeline metadata to the backend.</li>
-        <li>The backend trims source clips with ffmpeg.</li>
-        <li>The backend stitches clips into a single output.</li>
-        <li>The final video is written to disk.</li>
-      </ol>
+## Export Pipeline
 
-      <pre><code>/tmp/capi/&lt;session-id&gt;/export.mp4</code></pre>
+When the user clicks Export or Publish:
 
-      <div class="note">
-        Prototype export should favor re-encoding for compatibility instead of relying on concat-copy optimizations.
-      </div>
-    </section>
+1. The editor sends timeline metadata to the backend.
+2. The backend trims source clips with ffmpeg.
+3. The backend stitches clips into a single output.
+4. The final video is written to disk.
 
-    <section>
-      <h2>Process Model</h2>
-      <pre><code>Parent Process
-├── Editor Web Server (Vite)
-├── API/WebSocket Server
-├── Filesystem Watcher
-└── On-demand screencapture subprocesses</code></pre>
-    </section>
+```text
+/tmp/capi/<session-id>/export.mp4
+```
 
-    <section>
-      <h2>Prototype Stack</h2>
-      <div>
-        <span class="pill">Node.js</span>
-        <span class="pill">React</span>
-        <span class="pill">Vite</span>
-        <span class="pill">Express or Fastify</span>
-        <span class="pill">WebSocket</span>
-        <span class="pill">chokidar</span>
-        <span class="pill">ffmpeg</span>
-        <span class="pill">macOS screencapture</span>
-      </div>
-    </section>
+> Prototype export should favor re-encoding for compatibility instead of relying on concat-copy optimizations.
 
-    <section>
-      <h2>Directory Structure</h2>
-      <p>
-        Capi should be organized as a local Node runtime with a browser editor,
-        not as a traditional distributed frontend/backend app.
-      </p>
+## Process Model
 
-      <pre><code>capi-capture/
-  README.html
+```text
+Parent Process
+|-- Editor Web Server (Vite)
+|-- API/WebSocket Server
+|-- Filesystem Watcher
+`-- On-demand screencapture subprocesses
+```
+
+## Prototype Stack
+
+- Node.js
+- React
+- Vite
+- Express or Fastify
+- WebSocket
+- chokidar
+- ffmpeg
+- macOS screencapture
+
+## Directory Structure
+
+Capi should be organized as a local Node runtime with a browser editor, not as a traditional distributed frontend/backend app.
+
+```text
+capi-capture/
+  README.md
   docs/
     ubiquitous-language.md
 
@@ -438,47 +269,34 @@ POST /export</code></pre>
           ExportButton.tsx
 
     sketchybar/
-      capi.sh</code></pre>
+      capi.sh
+```
 
-      <p>
-        <code>apps/node/</code> owns the local runtime: macOS capture, temporary files,
-        source watching, API routes, WebSocket events, and ffmpeg export.
-        <code>apps/editor/</code> owns the browser editing experience. Shared schemas
-        and types define the contract between them.
-      </p>
-    </section>
+`apps/node/` owns the local runtime: macOS capture, temporary files, source watching, API routes, WebSocket events, and ffmpeg export. `apps/editor/` owns the browser editing experience. Shared schemas and types define the contract between them.
 
-    <section>
-      <h2>Session Lifecycle</h2>
+## Session Lifecycle
 
-      <h3>Startup</h3>
-      <ul>
-        <li>Parent process starts services.</li>
-        <li>Browser editor opens.</li>
-        <li>Session directory is created.</li>
-      </ul>
+### Startup
 
-      <h3>Recording</h3>
-      <ul>
-        <li>User records clips incrementally.</li>
-        <li>Clips automatically appear in the editor timeline.</li>
-      </ul>
+- Parent process starts services.
+- Browser editor opens.
+- Session directory is created.
 
-      <h3>Export</h3>
-      <ul>
-        <li>Timeline is exported through ffmpeg.</li>
-      </ul>
+### Recording
 
-      <h3>Shutdown</h3>
-      <ul>
-        <li>Closing the editor ends the session.</li>
-        <li>Child processes terminate.</li>
-        <li>Temporary session files may be cleaned up.</li>
-      </ul>
-    </section>
+- User records clips incrementally.
+- Clips automatically appear in the editor timeline.
 
-    <footer>
-      Capi is a prototype. The current implementation targets macOS and depends on the native
-      <code>screencapture</code> command.
-    </footer>
-  </main>
+### Export
+
+- Timeline is exported through ffmpeg.
+
+### Shutdown
+
+- Closing the editor ends the session.
+- Child processes terminate.
+- Temporary session files may be cleaned up.
+
+## Prototype Status
+
+Capi is a prototype. The current implementation targets macOS and depends on the native `screencapture` command.
