@@ -1,6 +1,20 @@
-# Capi
+<p align="center">
+  <img src="brand/logo.png" alt="Capi logo" width="128">
+</p>
 
-A prototype screen recording and editing tool for creating demos, walkthroughs, and guides using native macOS screen capture plus a browser-based editor.
+<h1 align="center">Capi</h1>
+
+<p align="center">
+  <strong>Record. Edit. Share.</strong>
+</p>
+
+<p align="center">
+  A prototype screen recording and editing tool for creating demos, walkthroughs, and guides using native macOS screen capture plus a browser-based editor.
+</p>
+
+<p align="center">
+  <img src="brand/branding.png" alt="Capi brand system">
+</p>
 
 ## Overview
 
