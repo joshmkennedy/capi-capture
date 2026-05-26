@@ -11,7 +11,7 @@ import { isCaptureSettings, isSessionEditorState } from "../shared/schemas"
 import type { CaptureSettings, SessionEditorState } from "../shared/types"
 import { capiExportMiddleware } from "./exportRoute"
 import { SourceRegistry } from "../sources/SourceRegistry"
-import { createMediaStill } from "../sources/MediaMetadata"
+import { createMediaStill, probeAudioHealth } from "../sources/MediaMetadata"
 import type { StoredSession } from "../session/SessionStore"
 import { writeRuntimeStatus } from "../status/RuntimeStatus"
 
@@ -346,10 +346,17 @@ async function captureSource(
 
   const result = await capture.result
   const source = await registry.registerSourceWithMetadata(result.filePath)
+  const audioHealth = settings.microphone ? await probeAudioHealth(result.filePath) : null
+  const message = audioHealth?.hasAudio === false
+    ? "Recording saved, but no microphone audio track was found."
+    : audioHealth?.isSilent
+      ? "Recording saved, but microphone audio appears silent. Check the macOS input source and microphone permission."
+      : "Recording saved."
+
   await writeRuntimeStatus({
     state: "idle",
     sessionId: session.id,
-    message: "Recording saved.",
+    message,
   })
   sendJson(response, 200, registry.sourceForEditor(source))
 }
@@ -755,14 +762,24 @@ export function capiRuntimeMiddleware(root: string) {
         }
 
         const captureSession = activeCaptureSession ?? activeSession
+        const captureCompletion = activeCapture
         void writeRuntimeStatus({
           state: "stopping",
           sessionId: captureSession?.id ?? null,
           message: "Stopping recording.",
         })
         activeScreenCapture.stop()
+
+        try {
+          await captureCompletion
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Capture failed."
+          sendJson(response, 500, { error: message })
+          return
+        }
+
         sendJson(response, 200, {
-          status: "stopping",
+          status: "stopped",
           sessionId: captureSession?.id ?? null,
           url: captureSession ? sessionViewUrl(captureSession.id) : null,
         })

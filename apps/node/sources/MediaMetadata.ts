@@ -8,6 +8,12 @@ type FfprobeFormat = {
   }
 }
 
+export type AudioHealth = {
+  hasAudio: boolean
+  isSilent: boolean
+  maxVolumeDb: number | null
+}
+
 export function probeMediaDuration(filePath: string): Promise<number | null> {
   return new Promise((resolve) => {
     const child = spawn("ffprobe", [
@@ -40,6 +46,59 @@ export function probeMediaDuration(filePath: string): Promise<number | null> {
       } catch {
         resolve(null)
       }
+    })
+  })
+}
+
+export function probeAudioHealth(filePath: string, sampleSeconds = 5): Promise<AudioHealth | null> {
+  return new Promise((resolve) => {
+    const child = spawn("ffmpeg", [
+      "-hide_banner",
+      "-nostats",
+      "-t",
+      String(sampleSeconds),
+      "-i",
+      filePath,
+      "-map",
+      "0:a:0",
+      "-vn",
+      "-af",
+      "volumedetect",
+      "-f",
+      "null",
+      "-",
+    ], {
+      stdio: ["ignore", "ignore", "pipe"],
+    })
+    let stderr = ""
+
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString()
+    })
+    child.on("error", () => resolve(null))
+    child.on("close", () => {
+      if (stderr.includes("matches no streams") || stderr.includes("Stream map '0:a:0'")) {
+        resolve({ hasAudio: false, isSilent: false, maxVolumeDb: null })
+        return
+      }
+
+      const maxVolumeMatch = stderr.match(/max_volume:\s*(-?(?:\d+(?:\.\d+)?|inf)) dB/)
+      if (!maxVolumeMatch) {
+        resolve(null)
+        return
+      }
+
+      const maxVolumeDb = maxVolumeMatch[1] === "-inf" ? Number.NEGATIVE_INFINITY : Number(maxVolumeMatch[1])
+      if (!Number.isFinite(maxVolumeDb) && maxVolumeDb !== Number.NEGATIVE_INFINITY) {
+        resolve(null)
+        return
+      }
+
+      resolve({
+        hasAudio: true,
+        isSilent: maxVolumeDb <= -80,
+        maxVolumeDb,
+      })
     })
   })
 }

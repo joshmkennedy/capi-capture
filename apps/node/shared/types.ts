@@ -74,7 +74,7 @@ export type CaptureStatus = {
 }
 
 export type StopCaptureResponse = {
-  status: "stopping"
+  status: "stopping" | "stopped"
   sessionId: string | null
   url: string | null
 }

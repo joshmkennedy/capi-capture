@@ -42,16 +42,17 @@ export function startScreenCapture(
     child.on("error", reject)
     child.on("close", async (code) => {
       try {
+        const outputStat = await stat(outputPath).catch(() => null)
+        if (outputStat?.isFile() && outputStat.size > 0) {
+          resolve({ filePath: outputPath })
+          return
+        }
+
         if (code !== 0) {
           throw new Error(stderr.trim() || `screencapture exited with code ${code}.`)
-        }
-
-        const outputStat = await stat(outputPath).catch(() => null)
-        if (!outputStat?.isFile() || outputStat.size === 0) {
+        } else {
           throw new Error("Capture did not create a playable source.")
         }
-
-        resolve({ filePath: outputPath })
       } catch (error) {
         await rm(outputPath, { force: true }).catch(() => undefined)
         reject(error)

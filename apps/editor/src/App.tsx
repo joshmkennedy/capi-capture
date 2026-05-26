@@ -111,7 +111,7 @@ function clipForSource(source: Source, index: number, options: { demoTrimmed?: b
   const timelineDuration = sourceEnd - sourceStart
 
   return {
-    id: `clip-${index + 1}`,
+    id: clipIdForSource(source.id),
     sourceId: source.id,
     sourceStart,
     sourceEnd,
@@ -121,12 +121,66 @@ function clipForSource(source: Source, index: number, options: { demoTrimmed?: b
   }
 }
 
+function clipIdForSource(sourceId: string) {
+  return `clip-${sourceId}`
+}
+
+function uniqueClipId(baseId: string, usedClipIds: Set<string>) {
+  if (!usedClipIds.has(baseId)) {
+    usedClipIds.add(baseId)
+    return baseId
+  }
+
+  let suffix = 2
+  let candidate = `${baseId}-${suffix}`
+  while (usedClipIds.has(candidate)) {
+    suffix += 1
+    candidate = `${baseId}-${suffix}`
+  }
+
+  usedClipIds.add(candidate)
+  return candidate
+}
+
+function normalizeClipIdentities(clips: Clip[]) {
+  const usedClipIds = new Set<string>()
+
+  return clips.map((clip) => {
+    const stableId = clip.id && !usedClipIds.has(clip.id)
+      ? clip.id
+      : clipIdForSource(clip.sourceId)
+
+    return {
+      ...clip,
+      id: uniqueClipId(stableId, usedClipIds),
+    }
+  })
+}
+
 function clipsForSources(sources: Source[]) {
   return sequenceClips(
     sources.map((source, index) =>
       clipForSource(source, index, { demoTrimmed: capiClientMode !== "runtime" }),
     ),
   )
+}
+
+function restoreClipsForSources(sources: Source[], restoredClips: Clip[]) {
+  if (restoredClips.length === 0) {
+    return clipsForSources(sources)
+  }
+
+  const normalizedRestoredClips = normalizeClipIdentities(restoredClips)
+  const restoredSourceIds = new Set(normalizedRestoredClips.map((clip) => clip.sourceId))
+  const newClips = sources
+    .filter((source) => !restoredSourceIds.has(source.id))
+    .map((source, index) => clipForSource(source, restoredClips.length + index))
+
+  return sequenceClips(normalizeClipIdentities([...normalizedRestoredClips, ...newClips]))
+}
+
+function clipsChanged(left: Clip[], right: Clip[]) {
+  return JSON.stringify(sortClips(left)) !== JSON.stringify(sortClips(right))
 }
 
 function clipDisplayColor(index: number) {
@@ -337,13 +391,16 @@ function EditorView({
 
         const sourceIds = new Set(loadedSources.map((source) => source.id))
         const restoredClips = editorState?.clips.filter((clip) => sourceIds.has(clip.sourceId)) ?? []
-        const loadedClips = restoredClips.length > 0 ? restoredClips : clipsForSources(loadedSources)
+        const loadedClips = restoreClipsForSources(loadedSources, restoredClips)
         clipsRef.current = loadedClips
         setSources(loadedSources)
         setClips(loadedClips)
         setActiveClipId(loadedClips[0]?.id ?? null)
         hasLoadedEditorStateRef.current = true
         setLoadState({ status: "ready" })
+        if (capiClientMode === "runtime" && clipsChanged(loadedClips, restoredClips)) {
+          void capiClient.saveSessionEditorState({ clips: sortClips(loadedClips) }, sessionId).catch(() => undefined)
+        }
       } catch (error) {
         if (!isCurrent) return
 
