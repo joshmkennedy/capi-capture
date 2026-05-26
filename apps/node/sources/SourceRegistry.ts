@@ -1,13 +1,15 @@
-import { readdir } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { readdir, rm } from "node:fs/promises"
 import path from "node:path"
 import type { Source } from "../shared/types"
-import { probeMediaDuration } from "./MediaMetadata"
+import { createMediaStill, probeMediaDuration } from "./MediaMetadata"
 
 const FALLBACK_SOURCE_DURATION = 12
 const SOURCE_URL_PREFIX = "/clips"
 
 type SourceRegistryOptions = {
   sessionId?: string | null
+  thumbnailPath?: string | null
 }
 
 export type RegisteredSource = Source & {
@@ -80,7 +82,9 @@ export class SourceRegistry {
     }
 
     const duration = await probeMediaDuration(filePath)
-    return this.registerSource(filePath, duration ? { duration } : {})
+    const source = this.registerSource(filePath, duration ? { duration } : {})
+    await this.ensureSessionThumbnail(filePath)
+    return source
   }
 
   async registerSourcesInDirectory(directory: string) {
@@ -101,6 +105,18 @@ export class SourceRegistry {
 
   sourceForEditor(source: RegisteredSource): Source {
     return publicSource(source)
+  }
+
+  async deleteSource(id: string) {
+    const source = this.sourcesById.get(id)
+    if (!source) {
+      return false
+    }
+
+    this.sourcesById.delete(id)
+    this.sourceIdsByFilePath.delete(source.filePath)
+    await rm(source.filePath, { force: true })
+    return true
   }
 
   updateDuration(id: string, duration: number) {
@@ -124,5 +140,13 @@ export class SourceRegistry {
     }
 
     return `${baseId}-${suffix}`
+  }
+
+  private async ensureSessionThumbnail(filePath: string) {
+    if (!this.options.thumbnailPath || existsSync(this.options.thumbnailPath)) {
+      return
+    }
+
+    await createMediaStill(filePath, this.options.thumbnailPath)
   }
 }

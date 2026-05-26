@@ -6,6 +6,7 @@
   "scripts": {
     "capi": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' npx tsx apps/node/main.ts",
     "capi:kill": "npm run capi -- --kill",
+    "capi:migrate-thumbnails": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' npx tsx apps/node/session/migrateSessionThumbnails.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

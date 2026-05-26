@@ -3,6 +3,7 @@ import type { Source } from "@/sources/sourceModel"
 import type {
   CreateSessionResponse,
   DeleteSessionResponse,
+  DeleteSourceResponse,
   ExportPayload,
   ExportResult,
   SessionEditorState,
@@ -28,6 +29,10 @@ export const mockCapiClient: CapiClient = {
 
   async deleteSession(): Promise<DeleteSessionResponse> {
     throw new Error("Sessions are only available in a Capi runtime.")
+  },
+
+  async deleteSource(sourceId: string): Promise<DeleteSourceResponse> {
+    return { sourceId }
   },
 
   async getCurrentSession() {

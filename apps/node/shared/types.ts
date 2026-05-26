@@ -49,6 +49,10 @@ export type DeleteSessionResponse = {
   sessionId: string
 }
 
+export type DeleteSourceResponse = {
+  sourceId: string
+}
+
 export type CaptureSettings = {
   target: "display"
   displayId: number

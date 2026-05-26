@@ -5,6 +5,7 @@ import type {
   CreateSessionResponse,
   CurrentSessionResponse,
   DeleteSessionResponse,
+  DeleteSourceResponse,
   ExportPayload,
   ExportResult,
   SessionEditorState,
@@ -40,6 +41,17 @@ export const runtimeCapiClient: CapiClient = {
     return deleteJson<DeleteSessionResponse>(
       `/sessions/${encodeURIComponent(sessionId)}`,
       "Could not delete session.",
+    )
+  },
+
+  async deleteSource(sourceId, sessionId) {
+    if (!sessionId) {
+      throw new Error("A session is required to delete a source.")
+    }
+
+    return deleteJson<DeleteSourceResponse>(
+      `/sessions/${encodeURIComponent(sessionId)}/sources/${encodeURIComponent(sourceId)}`,
+      "Could not delete source.",
     )
   },
 

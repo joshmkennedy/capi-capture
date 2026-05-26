@@ -5,6 +5,7 @@ import type {
   CreateSessionResponse,
   CurrentSessionResponse,
   DeleteSessionResponse,
+  DeleteSourceResponse,
   ExportPayload,
   ExportResult,
   SessionEditorState,
@@ -18,6 +19,7 @@ export type CapiClient = {
   createSession(): Promise<CreateSessionResponse>
   openSession(sessionId: string): Promise<CreateSessionResponse>
   deleteSession(sessionId: string): Promise<DeleteSessionResponse>
+  deleteSource(sourceId: string, sessionId?: string | null): Promise<DeleteSourceResponse>
   getCurrentSession(): Promise<CurrentSessionResponse>
   getSessionEditorState(sessionId?: string | null): Promise<SessionEditorState>
   saveSessionEditorState(state: SessionEditorState, sessionId?: string | null): Promise<SessionEditorState>

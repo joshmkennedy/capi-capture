@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
+import { spawn } from "node:child_process"
 import { exportPresentation } from "../export/FfmpegExporter"
 import type { PlanExportOptions } from "../export/ExportPlanner"
 import { isExportPayload } from "../shared/schemas"
@@ -33,6 +34,31 @@ function sendJson(response: ServerResponse, statusCode: number, body: unknown) {
   response.end(JSON.stringify(body))
 }
 
+function openCommandFor(filePath: string) {
+  if (process.platform === "darwin") {
+    return { command: "open", args: [filePath] }
+  }
+
+  if (process.platform === "win32") {
+    return { command: "cmd", args: ["/c", "start", "", filePath] }
+  }
+
+  return { command: "xdg-open", args: [filePath] }
+}
+
+function openExport(filePath: string) {
+  const opener = openCommandFor(filePath)
+  const child = spawn(opener.command, opener.args, {
+    detached: true,
+    stdio: "ignore",
+  })
+
+  child.on("error", () => {
+    console.warn(`Could not open export automatically. Open ${filePath} manually.`)
+  })
+  child.unref()
+}
+
 export function capiExportMiddleware(root: string, options: PlanExportOptions = {}) {
   return async (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     if (!request.url?.startsWith(EXPORT_ROUTE)) {
@@ -53,6 +79,7 @@ export function capiExportMiddleware(root: string, options: PlanExportOptions = 
       }
 
       const exportResult = await exportPresentation(root, body, options)
+      openExport(exportResult.outputPath)
       sendJson(response, 200, exportResult)
     } catch (error) {
       const message = error instanceof Error ? error.message : "Export failed."

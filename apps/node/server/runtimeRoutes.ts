@@ -1,6 +1,6 @@
 import { createReadStream, existsSync } from "node:fs"
 import { createHash, randomUUID } from "node:crypto"
-import { mkdir, rm, stat } from "node:fs/promises"
+import { mkdir, readdir, rm, stat } from "node:fs/promises"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import os from "node:os"
 import path from "node:path"
@@ -8,13 +8,15 @@ import { captureOptions } from "../capture/CaptureOptions"
 import { readCaptureSettings, writeCaptureSettings } from "../capture/CaptureSettingsStore"
 import { startScreenCapture, type ActiveCapture } from "../capture/ScreencaptureAdapter"
 import { isCaptureSettings, isSessionEditorState } from "../shared/schemas"
-import type { CaptureSettings } from "../shared/types"
+import type { CaptureSettings, SessionEditorState } from "../shared/types"
 import { capiExportMiddleware } from "./exportRoute"
 import { SourceRegistry } from "../sources/SourceRegistry"
+import { createMediaStill } from "../sources/MediaMetadata"
 import type { StoredSession } from "../session/SessionStore"
 import { writeRuntimeStatus } from "../status/RuntimeStatus"
 
 type ActiveRuntimeSession = Pick<StoredSession, "id" | "sessionDir" | "sourceDir">
+const SESSION_THUMBNAIL_FILE = "session-still.jpg"
 
 function sendJson(response: ServerResponse, statusCode: number, body: unknown) {
   response.statusCode = statusCode
@@ -38,27 +40,78 @@ function sourceDirFor(sessionId: string) {
   return path.join(sessionDirFor(sessionId), "sources")
 }
 
+function sessionThumbnailPath(session: ActiveRuntimeSession) {
+  return path.join(session.sessionDir, SESSION_THUMBNAIL_FILE)
+}
+
 function sessionViewUrl(sessionId: string) {
   return `/app/sessions/${encodeURIComponent(sessionId)}`
 }
 
 function sessionImageSvg(sessionId: string) {
   const hash = createHash("sha256").update(sessionId).digest("hex")
-  const hueA = Number.parseInt(hash.slice(0, 2), 16)
-  const hueB = Number.parseInt(hash.slice(2, 4), 16)
-  const hueC = Number.parseInt(hash.slice(4, 6), 16)
+  const liftA = Number.parseInt(hash.slice(0, 2), 16) % 46
+  const liftB = Number.parseInt(hash.slice(2, 4), 16) % 34
+  const offset = Number.parseInt(hash.slice(4, 6), 16) % 32
   const shortId = sessionId.slice(0, 8)
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img" aria-label="Session ${shortId}">
-  <rect width="960" height="540" fill="hsl(${hueA}, 28%, 12%)"/>
-  <rect x="48" y="56" width="864" height="428" rx="28" fill="hsl(${hueB}, 34%, 18%)" stroke="rgba(255,255,255,0.14)" stroke-width="2"/>
-  <path d="M96 352 C212 238 316 430 450 288 C588 142 690 330 864 196 L864 484 L96 484 Z" fill="hsl(${hueC}, 48%, 42%)" opacity="0.72"/>
-  <path d="M96 390 C228 280 328 454 468 326 C620 188 724 372 864 250" fill="none" stroke="rgba(255,255,255,0.36)" stroke-width="10" stroke-linecap="round"/>
-  <g fill="rgba(255,255,255,0.84)" font-family="Inter, ui-sans-serif, system-ui" font-weight="700">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#050816"/>
+      <stop offset="0.58" stop-color="#070c1f"/>
+      <stop offset="1" stop-color="#020511"/>
+    </linearGradient>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff5a1f"/>
+      <stop offset="0.35" stop-color="#ff2d7a"/>
+      <stop offset="0.68" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="18%" cy="10%" r="48%">
+      <stop offset="0" stop-color="#ff2d7a" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#ff2d7a" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="86%" cy="18%" r="46%">
+      <stop offset="0" stop-color="#2563eb" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#2563eb" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="960" height="540" fill="url(#bg)"/>
+  <rect width="960" height="540" fill="url(#glowA)"/>
+  <rect width="960" height="540" fill="url(#glowB)"/>
+  <rect x="48" y="56" width="864" height="428" rx="28" fill="rgba(8,14,31,0.72)" stroke="rgba(151,164,211,0.18)" stroke-width="2"/>
+  <path d="M96 ${358 - offset} C206 ${248 - liftA} 318 ${432 - liftB} 450 ${286 - offset} C584 ${142 + liftB} 704 ${334 - liftA} 864 ${196 + offset} L864 484 L96 484 Z" fill="url(#brand)" opacity="0.84"/>
+  <path d="M96 ${394 - offset} C226 ${280 - liftB} 330 ${454 - liftA} 468 ${326 - offset} C620 ${188 + liftA} 724 ${372 - liftB} 864 ${250 + offset}" fill="none" stroke="rgba(248,250,252,0.46)" stroke-width="10" stroke-linecap="round"/>
+  <g fill="rgba(248,250,252,0.88)" font-family="Inter, ui-sans-serif, system-ui" font-weight="700">
     <text x="96" y="132" font-size="34">Capi Session</text>
     <text x="96" y="176" font-size="22" opacity="0.72">${shortId}</text>
   </g>
 </svg>`
+}
+
+async function firstSessionSourcePath(session: ActiveRuntimeSession) {
+  const files = await readdir(session.sourceDir).catch(() => [])
+  const file = files
+    .filter((candidate) => candidate.toLowerCase().endsWith(".mov"))
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))[0]
+
+  return file ? path.join(session.sourceDir, file) : null
+}
+
+async function sessionStillPath(session: ActiveRuntimeSession) {
+  const firstSourcePath = await firstSessionSourcePath(session)
+  if (!firstSourcePath) {
+    return null
+  }
+
+  const thumbnailPath = sessionThumbnailPath(session)
+  if (!existsSync(thumbnailPath)) {
+    await createMediaStill(firstSourcePath, thumbnailPath)
+  }
+
+  const thumbnailStat = await stat(thumbnailPath).catch(() => null)
+  return thumbnailStat?.isFile() ? thumbnailPath : null
 }
 
 async function sessionStore() {
@@ -163,6 +216,20 @@ async function handleEditorStateRequest(
   } finally {
     store.close()
   }
+}
+
+function removeSourceFromEditorState(state: SessionEditorState, sourceId: string): SessionEditorState {
+  let timelineStart = 0
+  const clips = state.clips
+    .filter((clip) => clip.sourceId !== sourceId)
+    .sort((left, right) => left.timelineStart - right.timelineStart)
+    .map((clip) => {
+      const nextClip = { ...clip, timelineStart }
+      timelineStart += clip.timelineDuration
+      return nextClip
+    })
+
+  return { clips }
 }
 
 function parseRangeHeader(rangeHeader: string | undefined, size: number) {
@@ -323,7 +390,10 @@ export function capiRuntimeMiddleware(root: string) {
       return existingRegistry
     }
 
-    const registry = new SourceRegistry({ sessionId: session.id })
+    const registry = new SourceRegistry({
+      sessionId: session.id,
+      thumbnailPath: sessionThumbnailPath(session),
+    })
     sourceRegistries.set(session.id, registry)
     return registry
   }
@@ -439,6 +509,52 @@ export function capiRuntimeMiddleware(root: string) {
       return
     }
 
+    const deleteSessionSourceMatch = requestUrl.pathname.match(/^\/sessions\/([^/]+)\/sources\/([^/]+)$/)
+    if (deleteSessionSourceMatch) {
+      if (request.method !== "DELETE") {
+        sendJson(response, 405, { error: "Use DELETE /sessions/:sessionId/sources/:sourceId." })
+        return
+      }
+
+      const store = await sessionStore()
+      if (!store) {
+        sendJson(response, 500, { error: "No Capi session store is available." })
+        return
+      }
+
+      try {
+        const sessionId = decodeURIComponent(deleteSessionSourceMatch[1])
+        const sourceId = decodeURIComponent(deleteSessionSourceMatch[2])
+        const session = store.sessionById(sessionId)
+        if (!session) {
+          sendJson(response, 404, { error: "Session not found." })
+          return
+        }
+
+        if (activeSession?.id === session.id && captureInProgress()) {
+          sendJson(response, 409, { error: "Stop the active capture before deleting a source." })
+          return
+        }
+
+        const sourceRegistry = registryFor(session)
+        await syncSessionSources(sourceRegistry, session)
+        const deleted = await sourceRegistry.deleteSource(sourceId)
+        if (!deleted) {
+          sendJson(response, 404, { error: "Source not found." })
+          return
+        }
+
+        store.writeEditorState(
+          session.id,
+          removeSourceFromEditorState(store.readEditorState(session.id), sourceId),
+        )
+        sendJson(response, 200, { sourceId })
+      } finally {
+        store.close()
+      }
+      return
+    }
+
     const deleteSessionMatch = requestUrl.pathname.match(/^\/sessions\/([^/]+)$/)
     if (deleteSessionMatch) {
       if (request.method !== "DELETE") {
@@ -486,14 +602,32 @@ export function capiRuntimeMiddleware(root: string) {
       }
 
       const sessionId = decodeURIComponent(sessionImageMatch[1])
+      const store = await sessionStore()
+      const session = store?.sessionById(sessionId) ?? {
+        id: sessionId,
+        sessionDir: sessionDirFor(sessionId),
+        sourceDir: sourceDirFor(sessionId),
+      }
+      store?.close()
+      const stillPath = await sessionStillPath(session)
+
       response.statusCode = 200
-      response.setHeader("Content-Type", "image/svg+xml")
-      response.setHeader("Cache-Control", "public, max-age=31536000, immutable")
+      response.setHeader("Cache-Control", "no-cache")
       if (request.method === "HEAD") {
+        response.setHeader("Content-Type", stillPath ? "image/jpeg" : "image/svg+xml")
         response.end()
         return
       }
 
+      if (stillPath) {
+        const stillStat = await stat(stillPath)
+        response.setHeader("Content-Type", "image/jpeg")
+        response.setHeader("Content-Length", String(stillStat.size))
+        createReadStream(stillPath).pipe(response)
+        return
+      }
+
+      response.setHeader("Content-Type", "image/svg+xml")
       response.end(sessionImageSvg(sessionId))
       return
     }

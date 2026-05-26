@@ -1,8 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   ArrowDown,
-  ArrowLeft,
-  ArrowRight,
   ArrowUp,
   Calendar,
   Clock,
@@ -23,6 +21,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react"
+import { Toaster, toast } from "sonner"
 import { capiClient, capiClientMode } from "@/api/capiClient"
 import {
   AlertDialog,
@@ -42,6 +41,7 @@ import { useTimelinePreview } from "@/preview/useTimelinePreview"
 import type { Source } from "@/sources/sourceModel"
 import type { Clip } from "@/timeline/clipModel"
 import type { CaptureDisplay, CaptureSettings } from "../../node/shared/types"
+import capiLogoUrl from "../../../brand/logo.png"
 import { clipLength, timelineEnd } from "@/timeline/clipModel"
 import type { SessionSummary } from "../../node/shared/types"
 import {
@@ -60,8 +60,6 @@ import {
 type ExportState =
   | { status: "idle" }
   | { status: "exporting" }
-  | { status: "done"; message: string }
-  | { status: "error"; message: string }
 
 type LoadState =
   | { status: "loading" }
@@ -84,7 +82,20 @@ type AppRoute =
   | { view: "editor"; sessionId: string | null }
 
 const PIXELS_PER_SECOND = 44
-const CLIP_COLORS = ["#d99f3d", "#4f9a9a", "#c46f5e", "#7a83c8"]
+const CLIP_COLORS = [
+  "#ff5a1f",
+  "#2563eb",
+  "#ff2d7a",
+  "#5b21b6",
+  "#ff8a2a",
+  "#1e40af",
+  "#c026d3",
+  "#dc2626",
+  "#8b5cf6",
+  "#0f766e",
+  "#be123c",
+  "#312e81",
+]
 const DEFAULT_CAPTURE_SETTINGS: CaptureSettings = {
   target: "display",
   displayId: 1,
@@ -116,6 +127,10 @@ function clipsForSources(sources: Source[]) {
       clipForSource(source, index, { demoTrimmed: capiClientMode !== "runtime" }),
     ),
   )
+}
+
+function clipDisplayColor(index: number) {
+  return CLIP_COLORS[index % CLIP_COLORS.length]
 }
 
 function parseAppRoute(): AppRoute {
@@ -196,6 +211,8 @@ function EditorView({
   const [exportState, setExportState] = useState<ExportState>({ status: "idle" })
   const [deleteState, setDeleteState] = useState<"idle" | "deleting">("idle")
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [pendingDeleteSource, setPendingDeleteSource] = useState<Source | null>(null)
+  const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null)
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null)
   const clipsRef = useRef<Clip[]>([])
   const saveEditorStateRef = useRef<number | null>(null)
@@ -220,11 +237,11 @@ function EditorView({
   const panningClip =
     drag?.mode === "move" ? orderedClips.find((clip) => clip.id === drag.clipId) ?? null : null
   const presentationDuration = Math.max(...clips.map(timelineEnd), 0)
-  const totalSeconds = Math.max(
+  const timelineCanvasSeconds = Math.max(
     55,
     ...clips.map((clip) => clip.timelineStart + clipLength(clip) + 4),
   )
-  const timelineWidth = totalSeconds * PIXELS_PER_SECOND
+  const timelineWidth = timelineCanvasSeconds * PIXELS_PER_SECOND
 
   const persistClips = useCallback((nextClips: Clip[]) => {
     clipsRef.current = nextClips
@@ -467,7 +484,7 @@ function EditorView({
     sourceForClip,
     updateClipDuration,
   })
-  const playheadLeft = Math.min(previewTime, totalSeconds) * PIXELS_PER_SECOND
+  const playheadLeft = Math.min(previewTime, timelineCanvasSeconds) * PIXELS_PER_SECOND
 
   useEffect(() => {
     if (previewClip && activeClipId !== previewClip.id) {
@@ -552,13 +569,34 @@ function EditorView({
     commitClips(sequenceClips(nextOrder))
   }
 
-  function nudgeClip(clipId: string, amount: number) {
-    commitClips((current) => panClipSourceWindow(sortClips(current), clipId, amount, sourceDurationForClip))
+  function removeSourceLocally(sourceId: string) {
+    setSources((current) => current.filter((source) => source.id !== sourceId))
+    commitClips((current) => {
+      const nextClips = sequenceClips(sortClips(current).filter((clip) => clip.sourceId !== sourceId))
+      const nextActiveClip = activeClipId && nextClips.some((clip) => clip.id === activeClipId)
+        ? activeClipId
+        : nextClips[0]?.id ?? null
+
+      setActiveClipId(nextActiveClip)
+      setPreviewTime(nextActiveClip ? nextClips.find((clip) => clip.id === nextActiveClip)?.timelineStart ?? 0 : 0)
+      return nextClips
+    })
   }
 
-  function jumpPreviewToTrim(edge: "start" | "end") {
-    if (!activeClip) return
-    setPreviewTime(edge === "start" ? activeClip.timelineStart : timelineEnd(activeClip))
+  async function deleteSource(source: Source) {
+    setDeletingSourceId(source.id)
+    try {
+      await capiClient.deleteSource(source.id, sessionId)
+      removeSourceLocally(source.id)
+      setPendingDeleteSource(null)
+    } catch (error) {
+      setLoadState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Could not delete source.",
+      })
+    } finally {
+      setDeletingSourceId(null)
+    }
   }
 
   async function performCapture(settings: CaptureSettings) {
@@ -669,22 +707,26 @@ function EditorView({
 
   async function performExport() {
     setExportState({ status: "exporting" })
+    const toastId = toast.loading("Exporting presentation...")
 
-    const result = await capiClient.exportPresentation(createExportPayload(orderedClips, sourcesById))
-
-    setExportState({
-      status: "done",
-      message: result.outputPath ? `Saved to ${result.outputPath}` : "Saved to Downloads.",
-    })
+    try {
+      const result = await capiClient.exportPresentation(createExportPayload(orderedClips, sourcesById))
+      toast.success("Export complete", {
+        id: toastId,
+        description: result.outputPath ? `Opened ${result.outputPath}` : "Opened from Downloads.",
+      })
+    } catch (error) {
+      toast.error("Export failed", {
+        id: toastId,
+        description: error instanceof Error ? error.message : "Export failed.",
+      })
+    } finally {
+      setExportState({ status: "idle" })
+    }
   }
 
   function handleExport() {
-    void performExport().catch((error) => {
-      setExportState({
-        status: "error",
-        message: error instanceof Error ? error.message : "Export failed.",
-      })
-    })
+    void performExport()
   }
 
   async function deleteCurrentSession() {
@@ -707,101 +749,114 @@ function EditorView({
   }
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
+    <main className="min-h-screen bg-radial text-foreground">
+      <Toaster
+        closeButton
+        richColors
+        position="top-right"
+        theme="dark"
+        toastOptions={{
+          classNames: {
+            toast: "border-border bg-popover text-popover-foreground",
+            description: "text-muted-foreground",
+          },
+        }}
+      />
       <div className="flex min-h-screen flex-col">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-border px-5">
-          <div className="flex items-center gap-3">
-            <div className="flex size-9 items-center justify-center rounded-md bg-primary text-sm font-black text-primary-foreground">
-              C
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-background/75 px-5 backdrop-blur">
+          <div className="flex min-w-0 items-center gap-5">
+            <div className="flex items-center gap-3">
+              <img className="size-10 rounded-xl" src={capiLogoUrl} alt="" />
+              <div>
+                <h1 className="text-base font-semibold tracking-normal">Capi Editor</h1>
+                <p className="text-xs text-muted-foreground">
+                  {capiClientMode === "runtime" && sessionId
+                    ? `Session ${sessionId.slice(0, 8)}`
+                    : capiClientMode === "runtime"
+                      ? "Capi session"
+                      : "Standalone editor, mock sources"}
+                </p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-base font-semibold tracking-normal">Capi Editor</h1>
-              <p className="text-xs text-muted-foreground">
-                {capiClientMode === "runtime" && sessionId
-                  ? `Session ${sessionId.slice(0, 8)}`
-                  : capiClientMode === "runtime"
-                    ? "Capi session"
-                    : "Standalone editor, mock sources"}
-              </p>
+            <div className="hidden h-8 w-px bg-border md:block" />
+            <div className="hidden min-w-0 text-xs text-muted-foreground md:block">
+              <span>
+                {sources.length} sources
+                <span className="mx-2 inline-block h-4 w-px translate-y-1 bg-border" />
+                {seconds(presentationDuration)} timeline
+              </span>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              disabled={capiClientMode !== "runtime"}
-              onClick={onOpenSessions}
-              title="Open sessions"
-            >
-              <FolderOpen />
-              Sessions
-            </Button>
-            <Button
-              variant="outline"
-              disabled={capiClientMode !== "runtime" || !sessionId || deleteState === "deleting"}
-              onClick={() => setIsDeleteDialogOpen(true)}
-              title="Delete session"
-            >
-              {deleteState === "deleting" ? <Loader2 className="animate-spin" /> : <Trash2 />}
-              Delete
-            </Button>
-            <div className="hidden min-w-0 max-w-96 text-right text-xs text-muted-foreground md:block">
-              {exportState.status === "done" || exportState.status === "error" ? (
-                <span
-                  className={cn(
-                    "block truncate",
-                    exportState.status === "error" ? "text-destructive" : "text-muted-foreground",
-                  )}
-                  title={exportState.message}
-                >
-                  {exportState.message}
-                </span>
-              ) : (
-                <span>
-                  {sources.length} sources
-                  <span className="mx-2 inline-block h-4 w-px translate-y-1 bg-border" />
-                  {seconds(totalSeconds)} timeline
-                </span>
-              )}
-            </div>
-            <Button
-              disabled={exportState.status === "exporting" || orderedClips.length === 0}
-              onClick={handleExport}
-              title="Export presentation"
-            >
-              {exportState.status === "exporting" ? (
-                <Loader2 className="animate-spin" />
-              ) : (
-                <Download />
-              )}
-              {exportState.status === "exporting" ? "Exporting" : "Export"}
-            </Button>
-            <div className="inline-flex h-9 overflow-hidden rounded-md bg-secondary shadow-sm ring-1 ring-border">
+          <div className="flex items-center gap-2">
+            <ToolbarSection>
               <Button
-                variant="secondary"
+                variant="outline"
                 disabled={capiClientMode !== "runtime"}
-                onClick={handleCapture}
-                title={capiClientMode === "runtime" ? "Record source" : "Capture is available in a Capi session"}
-                className="h-9 rounded-none shadow-none ring-0"
+                onClick={onOpenSessions}
+                title="Open sessions"
               >
-                {captureState.status === "capturing" ? <Square /> : <Video />}
-                {captureState.status === "capturing" ? "Stop" : "Record"}
+                <FolderOpen />
+                Sessions
               </Button>
               <Button
-                variant="secondary"
-                size="icon"
-                disabled={capiClientMode !== "runtime" || captureState.status === "capturing"}
-                onClick={openCaptureSettings}
-                title="Capture settings"
-                className="h-9 w-8 rounded-none border-l border-border/80 px-0 shadow-none ring-0"
+                variant="outline"
+                disabled={capiClientMode !== "runtime" || !sessionId || deleteState === "deleting"}
+                onClick={() => setIsDeleteDialogOpen(true)}
+                title="Delete session"
               >
-                <EllipsisVertical />
+                {deleteState === "deleting" ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                Delete
               </Button>
-            </div>
+            </ToolbarSection>
+
+            <ToolbarDivider />
+
+            <ToolbarSection>
+              <div className="inline-flex h-9 overflow-hidden rounded-md border border-accent/60 bg-background/35 shadow-sm transition-[background,border-color,box-shadow,color,filter] focus-within:ring-2 focus-within:ring-accent hover:border-accent/85 hover:bg-accent/5">
+                <Button
+                  variant="ghost"
+                  disabled={capiClientMode !== "runtime"}
+                  onClick={handleCapture}
+                  title={capiClientMode === "runtime" ? "Record source" : "Capture is available in a Capi session"}
+                  className="h-9 rounded-none border-0 bg-transparent shadow-none ring-0 hover:bg-transparent"
+                >
+                  {captureState.status === "capturing" ? <Square /> : <Video />}
+                  {captureState.status === "capturing" ? "Stop" : "Record"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={capiClientMode !== "runtime" || captureState.status === "capturing"}
+                  onClick={openCaptureSettings}
+                  title="Capture settings"
+                  className="h-9 w-8 rounded-none border-0 border-l border-accent/35 bg-transparent px-0 shadow-none ring-0 hover:bg-transparent"
+                >
+                  <EllipsisVertical />
+                </Button>
+              </div>
+            </ToolbarSection>
+
+            <ToolbarDivider />
+
+            <ToolbarSection>
+              <Button
+                disabled={exportState.status === "exporting" || orderedClips.length === 0}
+                onClick={handleExport}
+                title="Export presentation"
+              >
+                {exportState.status === "exporting" ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Download />
+                )}
+                {exportState.status === "exporting" ? "Exporting" : "Export"}
+              </Button>
+            </ToolbarSection>
           </div>
         </header>
 
         <section className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] overflow-hidden">
-          <aside className="min-h-0 overflow-y-auto border-r border-border bg-card/50 p-4">
+          <aside className="min-h-0 overflow-y-auto border-r border-border bg-panel p-4 backdrop-blur">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold">Sources</h2>
               <span className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground">
@@ -810,45 +865,56 @@ function EditorView({
             </div>
             <div className="space-y-2">
               {loadState.status === "loading" ? (
-                <div className="rounded-lg border border-border bg-card p-3 text-sm text-muted-foreground">
+                <div className="rounded-lg border border-border bg-panel p-3 text-sm text-muted-foreground">
                   Loading sources...
                 </div>
               ) : null}
               {loadState.status === "error" ? (
-                <div className="rounded-lg border border-destructive/50 bg-card p-3 text-sm text-destructive">
+                <div className="rounded-lg border border-destructive/50 bg-panel p-3 text-sm text-destructive">
                   {loadState.message}
                 </div>
               ) : null}
               {captureState.status === "error" ? (
-                <div className="rounded-lg border border-destructive/50 bg-card p-3 text-sm text-destructive">
+                <div className="rounded-lg border border-destructive/50 bg-panel p-3 text-sm text-destructive">
                   {captureState.message}
                 </div>
               ) : null}
               {loadState.status === "ready" && orderedClips.length === 0 ? (
-                <div className="rounded-lg border border-border bg-card p-3 text-sm text-muted-foreground">
+                <div className="rounded-lg border border-border bg-panel p-3 text-sm text-muted-foreground">
                   No sources yet.
                 </div>
               ) : null}
               {orderedClips.map((clip, index) => {
                 const source = sourceForClip(clip)
+                const displayColor = clipDisplayColor(index)
+                const isDeletingSource = deletingSourceId === source.id
 
                 return (
-                  <button
+                  <div
                     key={clip.id}
+                    role="button"
+                    tabIndex={0}
                     className={cn(
                       "grid w-full grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border p-3 text-left transition-colors",
                       activeClip?.id === clip.id
                         ? "border-primary bg-primary/10"
-                        : "border-border bg-card hover:bg-secondary",
+                        : "border-border bg-panel hover:bg-secondary",
                     )}
                     onClick={() => {
                       setActiveClipId(clip.id)
                       seekPreview(clip.timelineStart)
                     }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault()
+                        setActiveClipId(clip.id)
+                        seekPreview(clip.timelineStart)
+                      }
+                    }}
                   >
                     <span
                       className="h-full min-h-12 rounded-sm"
-                      style={{ backgroundColor: clip.color }}
+                      style={{ backgroundColor: displayColor }}
                     />
                     <span className="min-w-0">
                       <span className="block truncate text-sm font-medium">{source.title}</span>
@@ -865,7 +931,7 @@ function EditorView({
                       <Button
                         variant="ghost"
                         size="icon"
-                        disabled={index === 0}
+                        disabled={index === 0 || isDeletingSource}
                         onClick={(event) => {
                           event.stopPropagation()
                           reorderClip(clip.id, -1)
@@ -877,7 +943,7 @@ function EditorView({
                       <Button
                         variant="ghost"
                         size="icon"
-                        disabled={index === orderedClips.length - 1}
+                        disabled={index === orderedClips.length - 1 || isDeletingSource}
                         onClick={(event) => {
                           event.stopPropagation()
                           reorderClip(clip.id, 1)
@@ -886,8 +952,20 @@ function EditorView({
                       >
                         <ArrowDown />
                       </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={isDeletingSource}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setPendingDeleteSource(source)
+                        }}
+                        title="Delete source"
+                      >
+                        {isDeletingSource ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                      </Button>
                     </span>
-                  </button>
+                  </div>
                 )
               })}
             </div>
@@ -895,7 +973,7 @@ function EditorView({
 
           <section className="grid min-h-0 grid-rows-[minmax(0,1fr)_300px]">
             <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_300px] gap-4 overflow-hidden p-4">
-              <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-lg border border-border bg-black">
+              <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-lg border border-border bg-black shadow-sm">
                 <div className="relative h-full min-h-80 overflow-hidden bg-black">
                   {[0, 1].map((slot) => (
                     <video
@@ -933,7 +1011,7 @@ function EditorView({
                   ) : null}
                 </div>
 
-                <div className="border-t border-border bg-[#111318] p-3">
+                <div className="border-t border-border bg-panel p-3">
                   <div className="mb-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
                     <span className="font-mono text-foreground">{seconds(previewTime)}</span>
                     <span className="min-w-0 truncate">
@@ -991,54 +1069,12 @@ function EditorView({
                       <Metric label="Timeline" value={activeClip ? seconds(activeClip.timelineStart) : "--"} />
                       <Metric label="Length" value={activeClip ? seconds(clipLength(activeClip)) : "--"} />
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button variant="outline" size="sm" disabled={!activeClip} onClick={() => jumpPreviewToTrim("start")}>
-                        <SkipBack />
-                        In
-                      </Button>
-                      <Button variant="outline" size="sm" disabled={!activeClip} onClick={() => jumpPreviewToTrim("end")}>
-                        <SkipForward />
-                        Out
-                      </Button>
-                      <Button variant="secondary" size="sm" disabled={!activeClip} onClick={() => activeClip ? nudgeClip(activeClip.id, -0.5) : undefined}>
-                        <ArrowLeft />
-                        0.5s
-                      </Button>
-                      <Button variant="secondary" size="sm" disabled={!activeClip} onClick={() => activeClip ? nudgeClip(activeClip.id, 0.5) : undefined}>
-                        <ArrowRight />
-                        0.5s
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Editor State</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <pre className="max-h-60 overflow-auto rounded-md bg-[#0b0d11] p-3 text-xs text-muted-foreground">
-                      {JSON.stringify(
-                        {
-                          clips: orderedClips.map((clip) => ({
-                            file: sourceForClip(clip).file,
-                            sourcePath: sourceForClip(clip).sourcePath,
-                            sourceStart: Number(clip.sourceStart.toFixed(2)),
-                            sourceEnd: Number(clip.sourceEnd.toFixed(2)),
-                            timelineStart: Number(clip.timelineStart.toFixed(2)),
-                            timelineDuration: Number(clip.timelineDuration.toFixed(2)),
-                          })),
-                        },
-                        null,
-                        2,
-                      )}
-                    </pre>
                   </CardContent>
                 </Card>
               </div>
             </div>
 
-            <footer className="min-w-0 border-t border-border bg-[#151820]">
+            <footer className="min-w-0 border-t border-border bg-panel">
               <div className="flex h-11 items-center justify-between border-b border-border px-4">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <Scissors className="size-4 text-primary" />
@@ -1066,7 +1102,7 @@ function EditorView({
                 }}
               >
                 <div className="relative h-full" style={{ width: timelineWidth }}>
-                  <TimelineRuler seconds={totalSeconds} />
+                  <TimelineRuler seconds={timelineCanvasSeconds} />
                   <div className="absolute left-0 right-0 top-12 h-px bg-border" />
                   <div className="absolute left-0 right-0 top-12 h-[96px] bg-[linear-gradient(to_right,rgba(255,255,255,0.055)_1px,transparent_1px)] bg-[length:44px_100%]" />
                   <div
@@ -1090,12 +1126,13 @@ function EditorView({
                     <div className="absolute -left-2 top-10 h-0 w-0 border-x-8 border-t-8 border-x-transparent border-t-primary" />
                   </div>
 
-                  {orderedClips.map((clip) => {
+                  {orderedClips.map((clip, index) => {
                     const source = sourceForClip(clip)
                     const left = clip.timelineStart * PIXELS_PER_SECOND
                     const width = Math.max(clipLength(clip) * PIXELS_PER_SECOND, 32)
                     const top = 78
                     const isPanningClip = panningClip?.id === clip.id
+                    const displayColor = clipDisplayColor(index)
 
                     return (
                       <div
@@ -1111,7 +1148,7 @@ function EditorView({
                           left,
                           top,
                           width,
-                          backgroundColor: clip.color,
+                          backgroundColor: displayColor,
                         }}
                         onPointerDown={(event) => beginDrag(event, clip, "move")}
                         onClick={() => {
@@ -1160,6 +1197,7 @@ function EditorView({
                     <PanningSourceOverlay
                       clip={panningClip}
                       source={sourceForClip(panningClip)}
+                      color={clipDisplayColor(Math.max(orderedClips.findIndex((clip) => clip.id === panningClip.id), 0))}
                       pixelsPerSecond={PIXELS_PER_SECOND}
                     />
                   ) : null}
@@ -1180,6 +1218,39 @@ function EditorView({
           onSubmit={handleCaptureSettingsSubmit}
         />
       ) : null}
+      <AlertDialog
+        open={pendingDeleteSource !== null}
+        onOpenChange={(open) => {
+          if (!open && deletingSourceId === null) {
+            setPendingDeleteSource(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete source?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove {pendingDeleteSource?.title} from this session and delete its clip from the timeline.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingSourceId !== null}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              disabled={deletingSourceId !== null || !pendingDeleteSource}
+              onClick={(event) => {
+                event.preventDefault()
+                if (pendingDeleteSource) {
+                  void deleteSource(pendingDeleteSource)
+                }
+              }}
+            >
+              {deletingSourceId !== null ? <Loader2 className="animate-spin" /> : <Trash2 />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1206,6 +1277,18 @@ function EditorView({
       </AlertDialog>
     </main>
   )
+}
+
+function ToolbarSection({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={cn("flex items-center gap-2", className)}>
+      {children}
+    </div>
+  )
+}
+
+function ToolbarDivider({ className }: { className?: string }) {
+  return <div aria-hidden="true" className={cn("h-8 w-px bg-border", className)} />
 }
 
 function SessionGrid({ onOpenSession }: { onOpenSession: (sessionId: string) => void }) {
@@ -1288,13 +1371,11 @@ function SessionGrid({ onOpenSession }: { onOpenSession: (sessionId: string) => 
   const sessions = sessionsResponse?.sessions ?? []
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
+    <main className="min-h-screen bg-radial text-foreground">
       <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-5 py-5">
         <header className="flex shrink-0 flex-wrap items-center justify-between gap-4 border-b border-border pb-5">
           <div className="flex items-center gap-3">
-            <div className="flex size-9 items-center justify-center rounded-md bg-primary text-sm font-black text-primary-foreground">
-              C
-            </div>
+            <img className="size-10 rounded-xl" src={capiLogoUrl} alt="" />
             <div>
               <h1 className="text-base font-semibold tracking-normal">Capi Sessions</h1>
               <p className="text-xs text-muted-foreground">
@@ -1313,7 +1394,7 @@ function SessionGrid({ onOpenSession }: { onOpenSession: (sessionId: string) => 
         </header>
 
         {loadState.status === "error" ? (
-          <div className="mt-5 rounded-md border border-destructive/50 bg-card p-3 text-sm text-destructive">
+          <div className="mt-5 rounded-md border border-destructive/50 bg-panel p-3 text-sm text-destructive">
             {loadState.message}
           </div>
         ) : null}
@@ -1352,7 +1433,7 @@ function SessionGrid({ onOpenSession }: { onOpenSession: (sessionId: string) => 
                 >
                   <div className="relative aspect-video overflow-hidden bg-muted">
                     <img
-                      src={`/sessions/${encodeURIComponent(session.id)}/image`}
+                      src={`/sessions/${encodeURIComponent(session.id)}/image?theme=brand-2026-05`}
                       alt=""
                       className="h-full w-full object-cover"
                     />
@@ -1479,10 +1560,12 @@ function formatDate(value: string) {
 function PanningSourceOverlay({
   clip,
   source,
+  color,
   pixelsPerSecond,
 }: {
   clip: Clip
   source: Source
+  color: string
   pixelsPerSecond: number
 }) {
   const sourceDuration = Math.max(source.duration, clip.sourceEnd, MIN_CLIP_SECONDS)
@@ -1499,8 +1582,8 @@ function PanningSourceOverlay({
           left: sourceLeft,
           width: sourceWidth,
           minWidth: windowWidth,
-          borderColor: clip.color,
-          backgroundColor: clip.color,
+          borderColor: color,
+          backgroundColor: color,
           backgroundImage:
             "linear-gradient(to right, rgba(255,255,255,0.24) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.18), rgba(0,0,0,0.28))",
           backgroundSize: `${pixelsPerSecond}px 100%, 100% 100%`,
@@ -1544,7 +1627,7 @@ function CaptureSettingsDialog({
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
       <form
-        className="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-xl"
+        className="w-full max-w-md rounded-lg border border-border bg-panel p-5 shadow-panel"
         onSubmit={onSubmit}
       >
         <div className="mb-5">

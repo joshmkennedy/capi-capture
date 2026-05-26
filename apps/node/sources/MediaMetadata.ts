@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process"
+import { mkdir } from "node:fs/promises"
+import path from "node:path"
 
 type FfprobeFormat = {
   format?: {
@@ -39,5 +41,29 @@ export function probeMediaDuration(filePath: string): Promise<number | null> {
         resolve(null)
       }
     })
+  })
+}
+
+export async function createMediaStill(filePath: string, outputPath: string): Promise<boolean> {
+  await mkdir(path.dirname(outputPath), { recursive: true })
+
+  return new Promise((resolve) => {
+    const child = spawn("ffmpeg", [
+      "-y",
+      "-ss",
+      "0.1",
+      "-i",
+      filePath,
+      "-frames:v",
+      "1",
+      "-vf",
+      "scale=960:-2",
+      outputPath,
+    ], {
+      stdio: ["ignore", "ignore", "ignore"],
+    })
+
+    child.on("error", () => resolve(false))
+    child.on("close", (code) => resolve(code === 0))
   })
 }
