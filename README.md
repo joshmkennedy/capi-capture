@@ -8,6 +8,85 @@ Capi combines a parent orchestration process with a Vite-powered React editor. T
 
 Shared product and domain terms are defined in [docs/ubiquitous-language.md](docs/ubiquitous-language.md).
 
+## Install
+
+Capi currently targets macOS. It uses the built-in `screencapture` command for recording and `ffmpeg` for metadata, thumbnails, trimming, and export.
+
+Install system dependencies:
+
+```sh
+brew install ffmpeg
+```
+
+Install JavaScript dependencies. Run both commands: the root package owns the Node runtime, and `apps/editor` owns the Vite/React editor.
+
+```sh
+npm install
+npm install --prefix apps/editor
+```
+
+On first recording, macOS may ask your terminal app for Screen Recording and Microphone permissions. If capture fails or records a blank screen, check System Settings -> Privacy & Security -> Screen & System Audio Recording and Microphone.
+
+## Run
+
+Start Capi:
+
+```sh
+npm run capi
+```
+
+This starts the local runtime, starts the Vite editor on `http://127.0.0.1:8969`, creates or opens a session, and opens the editor in your browser unless `CAPI_NO_OPEN=1` is set.
+
+Useful runtime commands:
+
+```sh
+npm run capi -- --record        # start a new session and immediately start recording
+npm run capi -- --grid          # open the session grid
+npm run capi -- --last-session  # reopen the most recent session
+npm run capi -- --session <id>  # reopen a specific session
+npm run capi:kill               # stop the running Capi runtime
+```
+
+The runtime uses:
+
+- Runtime/editor URL: `http://127.0.0.1:8969`
+- Status file: `/tmp/capi/status.json`
+- Session files: `/tmp/capi/<session-id>/`
+
+## Optional: skhd and SketchyBar
+
+I run Capi with `skhd` for a keyboard shortcut and `SketchyBar` for capture status and stop control.
+
+Install the optional tools:
+
+```sh
+brew install koekeishiya/formulae/skhd
+brew install FelixKratz/formulae/sketchybar
+brew services start skhd
+brew services start sketchybar
+```
+
+Example `skhd` binding:
+
+```text
+cmd + shift - r : cd /path/to/capi-capture && npm run capi -- --record
+```
+
+The SketchyBar helper script lives at `apps/sketchybar/capi.sh`. It reads `/tmp/capi/status.json` and can stop the active capture by calling `DELETE http://127.0.0.1:8969/captures`.
+
+Example SketchyBar item:
+
+```sh
+sketchybar --add item capi right \
+  --set capi \
+    script="/path/to/capi-capture/apps/sketchybar/capi.sh" \
+    update_freq=1 \
+    drawing=off \
+    click_script="/path/to/capi-capture/apps/sketchybar/capi.sh --stop"
+```
+
+Use `CAPI_STATUS_FILE` or `CAPI_RUNTIME_URL` if your setup uses different paths or ports.
+
 ### Native capture
 
 Uses `screencapture` to provide macOS-native recording UI.
